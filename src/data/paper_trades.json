@@ -1,0 +1,31 @@
+[
+  {
+    "rangeHigh": 67326.4,
+    "rangeLow": 67300.5,
+    "breakoutTime": "2026-04-04T19:14:00.000Z",
+    "entryTime": "2026-04-04T19:59:00.000Z",
+    "direction": "buy",
+    "entryPrice": 67262.7,
+    "sl": 67258.58285714286,
+    "status": "closed",
+    "profit": -37.67345523944215,
+    "lastHigh": 67262.7,
+    "lastLow": 67262.7,
+    "units": 1.2144344205422228,
+    "exitPrice": 67258.58285714286,
+    "exitReason": "SL",
+    "exitTime": "2026-04-04T20:02:00.000Z",
+    "fee": 32.67345523944215
+  },
+  {
+    "entryTime": "2026-04-05T07:51:11.430Z",
+    "direction": "buy",
+    "entryPrice": 66745.7,
+    "sl": 66411.9715,
+    "tp": 67413.15699999999,
+    "status": "open",
+    "profit": -0.0011835968459393573,
+    "units": 0.00007491119278095818,
+    "lastHigh": 66745.7
+  }
+]
