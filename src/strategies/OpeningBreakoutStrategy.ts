@@ -25,6 +25,7 @@ export class OpeningBreakoutStrategy implements Strategy {
             simulationStartUnix = 0
         } = params;
 
+
         let currentBalance = capital;
         const closes = candles.map(c => c.close);
         let allTrades: Trade[] = [];

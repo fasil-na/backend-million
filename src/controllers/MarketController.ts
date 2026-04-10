@@ -39,6 +39,7 @@ export class MarketController {
     }
 
     static getStrategies(req: Request, res: Response) {
+        console.log('getStrategies------')
         const strategyList = Object.values(strategies).map(s => ({
             id: s.id,
             name: s.name,

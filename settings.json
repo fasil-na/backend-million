@@ -1,0 +1,10 @@
+{
+  "isLiveMonitoring": true,
+  "isPaperTrading": true,
+  "isLiveTrading": true,
+  "leverage": 10,
+  "timeInterval": "1",
+  "pair": "B-ETH_USDT",
+  "initialCapital": 1000,
+  "selectedStrategyId": "opening-breakout"
+}

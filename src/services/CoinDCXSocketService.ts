@@ -102,7 +102,7 @@ export class CoinDCXSocketService extends EventEmitter {
     }
 
     private registerListeners() {
-        if (!this.socket) return;
+        if (!this.socket) return
 
         this.socket.on("balance-update", (response) => {
             this.lastBalances = response.data;
@@ -117,19 +117,21 @@ export class CoinDCXSocketService extends EventEmitter {
             try {
                 // If data is a string (double-encoded JSON), parse it
                 const parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
-                const candleData = parsed.data?.[0];
+                const candleData = Array.isArray(parsed.data) ? parsed.data[0] : (parsed.data || parsed);
 
-                if (candleData) {
+                if (candleData && (candleData.open_time || candleData.t)) {
                     // Map to common format expected by frontend
                     const formattedCandle = {
-                        time: candleData.open_time,
-                        open: parseFloat(candleData.open),
-                        high: parseFloat(candleData.high),
-                        low: parseFloat(candleData.low),
-                        close: parseFloat(candleData.close),
-                        volume: parseFloat(candleData.volume)
+                        time: candleData.open_time || candleData.t,
+                        open: parseFloat(candleData.open || candleData.o),
+                        high: parseFloat(candleData.high || candleData.h),
+                        low: parseFloat(candleData.low || candleData.l),
+                        close: parseFloat(candleData.close || candleData.c),
+                        volume: parseFloat(candleData.volume || candleData.v)
                     };
                     this.emit('candlestick', formattedCandle);
+                } else {
+                    console.log('[Socket Service] No valid candle data in response');
                 }
             } catch (err) {
                 console.error('Error parsing candlestick data:', err);
