@@ -22,7 +22,7 @@ export class CoinDCXSocketService extends EventEmitter {
         super();
         this.apiKey = config.apiKey;
         this.apiSecret = config.apiSecret;
-        this.endpoint = config.endpoint || "wss://mercury-socket-publisher.coindcx.com/";
+        this.endpoint = "wss://stream.coindcx.com/";
     }
 
     public connect() {
@@ -37,6 +37,7 @@ export class CoinDCXSocketService extends EventEmitter {
             reconnectionDelay: 1000,
             reconnectionDelayMax: 5000,
             timeout: 20000,
+            query: { EIO: '3' }
         });
 
         this.socket.on('connect', () => {
@@ -113,13 +114,47 @@ export class CoinDCXSocketService extends EventEmitter {
         });
 
         this.socket.on("candlestick", (response) => {
-            console.log('hitting---candle')
-            this.emit('candlestick', response.data);
+            try {
+                // If data is a string (double-encoded JSON), parse it
+                const parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+                const candleData = parsed.data?.[0];
+
+                if (candleData) {
+                    // Map to common format expected by frontend
+                    const formattedCandle = {
+                        time: candleData.open_time,
+                        open: parseFloat(candleData.open),
+                        high: parseFloat(candleData.high),
+                        low: parseFloat(candleData.low),
+                        close: parseFloat(candleData.close),
+                        volume: parseFloat(candleData.volume)
+                    };
+                    this.emit('candlestick', formattedCandle);
+                }
+            } catch (err) {
+                console.error('Error parsing candlestick data:', err);
+                this.emit('candlestick', response.data || response);
+            }
         });
 
         this.socket.on("currentPrices@spot#update", (response) => {
             this.lastPrices.set('spot', response.data);
             this.emit('price-update', response.data);
+        });
+
+        this.socket.on("currentPrices@futures#update", (response) => {
+            const data = response.data || response;
+            if (data && data.prices) {
+                // Loop through all updated prices and emit them
+                Object.entries(data.prices).forEach(([pair, details]: [string, any]) => {
+                    if (details.mp) {
+                        this.emit('price-change', {
+                            m: pair,
+                            p: details.mp
+                        });
+                    }
+                });
+            }
         });
 
         this.socket.on("new-trade", (response) => {
@@ -132,6 +167,7 @@ export class CoinDCXSocketService extends EventEmitter {
             }
             this.emit('price-change', response.data);
         });
+
     }
 
     public disconnect() {

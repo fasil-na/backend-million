@@ -6,15 +6,13 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
 import crypto from 'crypto';
-
 import dummyData from './data/dummy_15m.json' with { type: 'json' };
 import { strategies } from './strategies/index.js';
-// import { strategyBuilder } from './strategies/strategyBuilder.js';
 import type { Candle, Trade } from './types/index.js';
 import { strategyBuilder } from './strategies/strategyBuilder.js';
 import { coinDCXSocket } from './services/CoinDCXSocketService.js';
 import http from 'http';
-import { Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -35,15 +33,6 @@ app.use(cors());
 app.use(express.json());
 // CoinDCX API Details
 const COINDCX_URL = "https://public.coindcx.com/market_data/candlesticks";
-
-// --- CoinDCX API Auth ---
-function createSignature(payload: any, secret: string) {
-    const signature = crypto
-        .createHmac('sha256', secret)
-        .update(JSON.stringify(payload))
-        .digest('hex');
-    return signature;
-}
 
 // Fetch dynamic leverage for futures
 async function getInstrumentLeverage(pair: string): Promise<number> {
@@ -248,7 +237,6 @@ app.get('/api/leverage/:pair', async (req: Request, res: Response) => {
     }
 });
 
-
 app.post('/api/backtest', async (req: Request, res: Response) => {
     try {
         const {
@@ -420,255 +408,61 @@ app.get('/api/paper-trades', (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to fetch paper trades' });
     }
 });
-//find best combination 
-
-app.post('/api/backtest/optimize', async (req: Request, res: Response) => {
-    try {
-        const pair: string = req.body.pair || "B-BTC_USDT";
-        const startYear: number = req.body.startYear || dayjs().year() - 3;
-        const resolutions: string[] = req.body.resolutions || ["5", "15", "30"];
-        const atrMultipliers: number[] = req.body.atrMultipliers || [1, 2, 3, 4, 5];
-        const feeRate: number = req.body.feeRate || 0.0002;
-
-        const leverage = await getInstrumentLeverage(pair);
-
-        const capitalPerTrade = 1;
-        const now = dayjs();
-        const start = dayjs().year(startYear).startOf('year');
-
-        // Generate list of months to check
-        const months: { year: number, month: number }[] = [];
-        let current = start;
-        while (current.isBefore(now)) {
-            months.push({ year: current.year(), month: current.month() });
-            current = current.add(1, 'month');
-        }
-
-        console.log(`Optimizing for ${pair} over ${months.length} months...`);
-
-        // results[res][atr] = { totalProfit, totalTrades, winRate, monthlyProfits: [] }
-        const configResults: Record<string, Record<number, any>> = {};
-
-        for (const resolution of resolutions) {
-            configResults[resolution] = {};
-            for (const atr of atrMultipliers) {
-                configResults[resolution][atr] = {
-                    totalProfit: 0,
-                    totalTrades: 0,
-                    wins: 0,
-                    monthlyProfits: []
-                };
-            }
-        }
-
-        // To avoid redundant API calls, we'll loop months then resolutions
-        for (const m of months) {
-            const monthStart = dayjs().year(m.year).month(m.month).startOf('month');
-            const monthEnd = dayjs().year(m.year).month(m.month).endOf('month');
-            const simulationStartUnix = Math.floor(monthStart.valueOf() / 1000);
-            const dataFetchStartUnix = simulationStartUnix - (24 * 60 * 60);
-            const endUnix = Math.floor(monthEnd.valueOf() / 1000);
-
-            for (const resolution of resolutions) {
-                try {
-                    const response = await axios.get(COINDCX_URL, {
-                        params: { pair, from: dataFetchStartUnix, to: endUnix, resolution, pcode: 'f' }
-                    });
-
-                    if (response.data.s !== 'ok' || !Array.isArray(response.data.data)) {
-                        continue;
-                    }
-
-                    const candles: Candle[] = response.data.data.sort((a: Candle, b: Candle) => a.time - b.time);
-
-                    const strategyId = req.body.strategyId || 'opening-breakout';
-                    const strategy = strategies[strategyId];
-
-                    if (!strategy) continue;
-
-                    for (const atrMultiplierSL of atrMultipliers) {
-                        const { trades, finalBalance } = strategy.run(candles, {
-                            ...req.body,
-                            leverage, // Use dynamic leverage
-                            capital: 1000, // For optimization we might want to keep it consistent or follow same logic
-                            resolution,
-                            atrMultiplierSL,
-                            simulationStartUnix
-                        });
-
-                        const monthProfit = trades.reduce((a, t) => a + t.profit, 0);
-                        const monthWins = trades.filter(t => t.profit > 0).length;
-
-                        const target = configResults[resolution]?.[atrMultiplierSL];
-                        if (target) {
-                            target.totalProfit += monthProfit;
-                            target.totalTrades += trades.length;
-                            target.wins += monthWins;
-                            target.monthlyProfits.push({
-                                year: m.year,
-                                month: m.month,
-                                profit: monthProfit,
-                                trades: trades.length
-                            });
-                        }
-                    }
-                } catch (apiErr) {
-                    console.error(`Error fetching data for ${m.year}-${m.month} res ${resolution}:`, apiErr);
-                }
-            }
-        }
-
-        // Flatten results for sorting
-        const finalResults: any[] = [];
-        for (const resolution of resolutions) {
-            for (const atr of atrMultipliers) {
-                const res = configResults[resolution]?.[atr];
-                if (!res) continue;
-                finalResults.push({
-                    resolution,
-                    atrMultiplierSL: atr,
-                    totalProfit: res.totalProfit,
-                    totalTrades: res.totalTrades,
-                    winRate: res.totalTrades > 0 ? (res.wins / res.totalTrades) * 100 : 0,
-                    monthlyProfits: res.monthlyProfits
-                });
-            }
-        }
-
-        finalResults.sort((a, b) => b.totalProfit - a.totalProfit);
-
-        res.json({
-            best: finalResults[0] || null,
-            topResults: finalResults.slice(0, 5),
-            totalTested: finalResults.length,
-            periodChecked: `${start.format('MMM YYYY')} to ${now.format('MMM YYYY')}`
-        });
-
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Optimization failed' });
-    }
-});
-
-
-
-
-
-
-
-
-
-
-
-// ── Strategy Builder ──────────────────────────────────────────────────────────
-// Tests every possible filter combination on a month of data and returns ranked
-// results so the user can discover the best-performing configurations.
-app.post('/api/strategy-builder', async (req: Request, res: Response) => {
-    try {
-        const {
-            pair = 'B-BTC_USDT',
-            month = new Date().getMonth(),
-            year = new Date().getFullYear(),
-            resolution = '15',
-            perTradeAmount = 100,
-            feeRate = 0.0002,
-            useTrailingSL = true,
-            leverage: reqLeverage,
-        } = req.body;
-
-        const leverage = (!reqLeverage || reqLeverage <= 0) ? await getInstrumentLeverage(pair) : reqLeverage;
-
-        // Build the unix range for the requested month
-        const monthStart = dayjs().year(Number(year)).month(Number(month)).startOf('month');
-        const monthEnd = dayjs().year(Number(year)).month(Number(month)).endOf('month');
-
-        // Fetch 1 extra day before for indicator warm-up
-        const dataFetchStart = Math.floor(monthStart.subtract(1, 'day').valueOf() / 1000);
-        const dataFetchEnd = Math.floor(monthEnd.valueOf() / 1000);
-        console.log(pair, 'pair-------')
-        const response = await axios.get(COINDCX_URL, {
-            params: { pair, from: dataFetchStart, to: dataFetchEnd, resolution: String(resolution), pcode: 'f' }
-        });
-
-        if (response.data.s !== 'ok' || !Array.isArray(response.data.data) || response.data.data.length < 60) {
-            return res.status(422).json({ error: 'Not enough market data for the selected period' });
-        }
-
-        // Sort candles ascending and reshape into parallel arrays
-        const candles: Candle[] = [...response.data.data].sort((a: Candle, b: Candle) => a.time - b.time);
-
-        const marketData = {
-            close: candles.map(c => c.close),
-            high: candles.map(c => c.high),
-            low: candles.map(c => c.low),
-            volume: candles.map(c => c.volume),
-            time: candles.map(c => c.time),
-        };
-
-        const { results, totalCombinations } = strategyBuilder({
-            marketData,
-            perTradeAmount: Number(perTradeAmount),
-            feeRate: Number(feeRate),
-            useTrailingSL: Boolean(useTrailingSL),
-            leverage: Number(leverage),
-        });
-
-        // Return only top 200 results to keep response lean
-        const slim = results.slice(0, 200).map((r: any) => ({
-            config: r.config,
-            totalTrades: r.totalTrades,
-            wins: r.wins,
-            losses: r.losses,
-            winRate: r.winRate,
-            totalPL: r.totalPL,
-            avgWin: r.avgWin,
-            avgLoss: r.avgLoss,
-            riskReward: r.riskReward,
-        }));
-
-        res.json({
-            results: slim,
-            totalCombinations,
-            testedCombinations: results.length,
-            pair,
-            month,
-            year,
-            resolution,
-            perTradeAmount,
-            leverage,
-        });
-
-    } catch (err: any) {
-        console.error('Strategy builder error:', err.message);
-        res.status(500).json({ error: 'Strategy builder failed: ' + err.message });
-    }
-});
-
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-io.on('connection', (socket) => {
+// --- Socket Subscription Configuration ---
+const DEFAULT_PAIR = 'B-BTC_USDT';
+const DEFAULT_RESOLUTION = '1m';
+
+function formatChannelName(pair: string, resolution: string = DEFAULT_RESOLUTION) {
+    const instrument = pair.includes('B-') ? pair : `B-${pair}`;
+    return `${instrument}_${resolution}-futures`;
+}
+
+io.on('connection', (socket: Socket) => {
     console.log('Frontend connected to local socket:', socket.id);
 
     socket.on('subscribe', (pair: string) => {
-        console.log(`Frontend requesting subscription to ${pair}`);
-        // We push the subscription request to the actual CoinDCX WebSocket service
-        // CoinDCX generally uses specific channel names, so we subscribe accordingly:
-        const channelName = pair.includes('B-') ? pair : `B-${pair}`;
+        const channelName = formatChannelName(pair || DEFAULT_PAIR);
+        console.log(`Subscribing to CoinDCX channel: ${channelName}`);
         coinDCXSocket.subscribe(channelName);
     });
 });
 
+// Track state for autonomous 24/7 strategy execution
+let lastCandleTime: number | null = null;
+
 // Hook up internal socket forwarding
 coinDCXSocket.on('candlestick', (data) => {
+    // console.log('Received candlestick data, forwarding to frontend...', data);
     io.emit('candlestick', data);
+
+    // BAR CLOSE DETECTION LOGIC
+    if (lastCandleTime !== null && data.time > lastCandleTime) {
+        console.log(`✅ ${DEFAULT_RESOLUTION} Candle Closed at ${new Date(lastCandleTime * 1000).toISOString()}. Running strategies...`);
+        // 👉 EXECUTE STRATEGY HERE 24/7
+    }
+    lastCandleTime = data.time;
 });
+
 coinDCXSocket.on('price-change', (data) => {
     io.emit('price-change', data);
 });
 
 coinDCXSocket.connect();
+
+// Autonomous 24/7 listening for the default pair on startup
+coinDCXSocket.once('connected', () => {
+    const initialChannel = formatChannelName(DEFAULT_PAIR);
+    console.log(`Starting autonomous 24/7 listening for ${initialChannel}`);
+    coinDCXSocket.subscribe(initialChannel);
+
+    // Also subscribe to bulk price updates for all futures
+    console.log('Subscribing to bulk futures price updates (Ticker)');
+    coinDCXSocket.subscribe('currentPrices@futures#update');
+});
 
 server.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
