@@ -137,35 +137,8 @@ export class CoinDCXSocketService extends EventEmitter {
             }
         });
 
-        this.socket.on("currentPrices@spot#update", (response) => {
-            this.lastPrices.set('spot', response.data);
-            this.emit('price-update', response.data);
-        });
-
-        this.socket.on("currentPrices@futures#update", (response) => {
-            const data = response.data || response;
-            if (data && data.prices) {
-                // Loop through all updated prices and emit them
-                Object.entries(data.prices).forEach(([pair, details]: [string, any]) => {
-                    if (details.mp) {
-                        this.emit('price-change', {
-                            m: pair,
-                            p: details.mp
-                        });
-                    }
-                });
-            }
-        });
-
         this.socket.on("new-trade", (response) => {
             this.emit('new-trade', response.data);
-        });
-
-        this.socket.on("price-change", (response) => {
-            if (response.data && response.data.m) {
-                this.lastPrices.set(response.data.m, response.data);
-            }
-            this.emit('price-change', response.data);
         });
 
     }
