@@ -20,7 +20,7 @@ console.log(type,'type-----')
             return result;
         }
 
-        if (candles.length < 20) return { trades: [], finalBalance: capital };
+        if (candles.length < 10) return { trades: [], finalBalance: capital };
 
         const {
             feeRate = 0.0002,
@@ -208,7 +208,7 @@ console.log(type,'type-----')
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL = 1, maxPositionSize = 100, feeRate = 0.0002, leverage = 1 } = params;
+        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0002, leverage = 1 } = params;
         const entry = c.close;
         const atr = this.calculateATR(candles, 14, i);
         const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
@@ -234,7 +234,7 @@ console.log(type,'type-----')
     }
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
-        if (candles.length < 20) return { matched: false };
+        if (candles.length < 10) return { matched: false };
         
         const i = candles.length - 1;
         const c = candles[i];
@@ -244,7 +244,7 @@ console.log(type,'type-----')
         let rangeLow: number | null = null;
         const time = dayjs(c.time).tz('Asia/Kolkata');
         const currentDay = time.format('YYYY-MM-DD');
-        const openingWindow = 20;
+        const openingWindow = 0;
 
         let dayCandleCount = 0;
         for (const candle of candles) {

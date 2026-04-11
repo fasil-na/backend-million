@@ -1,0 +1,19 @@
+[
+  {
+    "entryTime": "2026-04-11T10:45:35.568Z",
+    "direction": "buy",
+    "pair": "BTCUSDT",
+    "entryPrice": 72742.7,
+    "units": 0.01374708,
+    "sl": 72735.8857142857,
+    "status": "closed",
+    "profit": -0.4936576820775086,
+    "type": "manual",
+    "lastHigh": 72747.4,
+    "trailingCount": 1,
+    "exitPrice": 72735.8857142857,
+    "exitTime": "2026-04-11T10:46:14.638Z",
+    "exitReason": "SL Hit (Real-time Tick)",
+    "fee": 0.3999811512202286
+  }
+]

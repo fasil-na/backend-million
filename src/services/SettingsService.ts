@@ -1,9 +1,5 @@
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { SETTINGS_FILE } from '../config/constants.js';
 
 export interface AppSettings {
     isLiveMonitoring: boolean;
@@ -26,8 +22,6 @@ const DEFAULT_SETTINGS: AppSettings = {
     initialCapital: 1000,
     selectedStrategyId: 'opening-breakout'
 };
-
-const SETTINGS_FILE = path.join(__dirname, '../../settings.json');
 
 export class SettingsService {
     private static currentSettings: AppSettings | null = null;

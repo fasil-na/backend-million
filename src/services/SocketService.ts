@@ -78,7 +78,12 @@ export class SocketService {
             this.io.emit('candlestick', data);
             this.io.emit('price-change', { m: settings.pair, p: data.close });
 
-            if (this.lastCandleTime !== null && data.time > this.lastCandleTime) {
+            // 1. Real-time Monitoring (Check SL hit on every tick)
+            if (settings.isLiveMonitoring) {
+                this.monitorRealTimeSL(data);
+            }
+
+            if (this.lastCandleTime !== null && data.time > this.lastCandleTime && settings.isLiveMonitoring ) {
                 console.log(`✅ Candle Closed at ${new Date(this.lastCandleTime).toISOString()}. Running strategies...`);
                 await this.executeLiveStrategy();
             }
@@ -110,7 +115,7 @@ export class SocketService {
             const todayStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);
             const from = todayStart - (24 * 60 * 60); // Fetch 24h history for indicator stability
             // Fetch history only if cache is empty or for a different pair
-            if (this.candles.length < 20) {
+            if (this.candles.length < 10) {
                 console.log(`[Autonomous] Fetching historical candles for ${pair} (Interval: ${settings.timeInterval})...`);
                 const now = Math.floor(Date.now() / 1000);
                 const response = await CoinDCXApiService.getCandlesticks({
@@ -178,38 +183,14 @@ export class SocketService {
                         }
                     }
 
-                    // 1.5 Manage Active Paper Trades
+                    // 1.5 Manage Active Paper Trades (Trailing SL update only)
                     if (settings.isPaperTrading) {
                         const activePaperTrade = PaperTradeService.getActiveTrade();
                         if (activePaperTrade) {
                             OpeningBreakoutStrategy.updateTrailingSL(activePaperTrade, lastCandle);
-                            
-                            // Check for Exit (SL Hit)
-                            let exited = false;
-                            if (activePaperTrade.direction === 'buy') {
-                                if (activePaperTrade.sl !== undefined && lastCandle.low <= activePaperTrade.sl) {
-                                    activePaperTrade.exitPrice = activePaperTrade.sl;
-                                    exited = true;
-                                }
-                            } else {
-                                if (activePaperTrade.sl !== undefined && lastCandle.high >= activePaperTrade.sl) {
-                                    activePaperTrade.exitPrice = activePaperTrade.sl;
-                                    exited = true;
-                                }
-                            }
-
-                            if (exited) {
-                                activePaperTrade.status = 'closed';
-                                activePaperTrade.exitTime = new Date().toISOString();
-                                activePaperTrade.exitReason = 'SL hit (Paper)';
-                                const { profit, fee } = calculateTradeProfit(activePaperTrade, activePaperTrade.exitPrice!, 0.0002);
-                                activePaperTrade.profit = profit;
-                                activePaperTrade.fee = fee;
-                                console.log("📄 Paper Trade Closed:", activePaperTrade);
-                            }
-                            
                             PaperTradeService.saveTrade(activePaperTrade);
-                            if (!exited) return; // Still in paper trade, don't check for new signal
+                            this.io.emit('paper-trade-update', activePaperTrade);
+                            return; // Still in paper trade, don't check for new signal
                         }
                     }
 
@@ -250,6 +231,46 @@ export class SocketService {
             }
         } catch (err: any) {
             console.error("Autonomous strategy failed:", err.message);
+        }
+    }
+
+    private static monitorRealTimeSL(tick: Candle) {
+        try {
+            const settings = SettingsService.getSettings();
+            if (settings.isPaperTrading) {
+                const activePaperTrade = PaperTradeService.getActiveTrade();
+                if (activePaperTrade && activePaperTrade.status === 'open') {
+                    let exited = false;
+                    const currentPrice = tick.close;
+                    
+                    if (activePaperTrade.direction === 'buy') {
+                        if (activePaperTrade.sl !== undefined && currentPrice <= activePaperTrade.sl) {
+                            activePaperTrade.exitPrice = activePaperTrade.sl;
+                            exited = true;
+                        }
+                    } else {
+                        if (activePaperTrade.sl !== undefined && currentPrice >= activePaperTrade.sl) {
+                            activePaperTrade.exitPrice = activePaperTrade.sl;
+                            exited = true;
+                        }
+                    }
+
+                    if (exited) {
+                        activePaperTrade.status = 'closed';
+                        activePaperTrade.exitTime = new Date().toISOString();
+                        activePaperTrade.exitReason = 'SL Hit (Real-time Tick)';
+                        const { profit, fee } = calculateTradeProfit(activePaperTrade, activePaperTrade.exitPrice!, 0.0002);
+                        activePaperTrade.profit = profit;
+                        activePaperTrade.fee = fee;
+                        console.log(`📄 Real-time Paper Trade Closed at ${currentPrice}:`, activePaperTrade);
+                        
+                        PaperTradeService.saveTrade(activePaperTrade);
+                        this.io.emit('paper-trade-update', activePaperTrade);
+                    }
+                }
+            }
+        } catch (err: any) {
+            console.error("Monitor real-time SL failed:", err.message);
         }
     }
 }

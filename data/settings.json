@@ -1,10 +1,10 @@
 {
   "isLiveMonitoring": true,
   "isPaperTrading": true,
-  "isLiveTrading": false,
-  "leverage": 20,
+  "isLiveTrading": true,
+  "leverage": 1,
   "timeInterval": "1",
   "pair": "B-BTC_USDT",
-  "initialCapital": 250,
+  "initialCapital": 1000,
   "selectedStrategyId": "opening-breakout"
 }
