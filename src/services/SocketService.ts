@@ -25,7 +25,15 @@ export class SocketService {
     private static lastKnownSLLow: number | null = null;
     private static currentPosition: any = null;
     static init(server: HTTPServer) {
-        this.io = new SocketIOServer(server, { cors: { origin: '*' } });
+        this.io = new SocketIOServer(server, { 
+            cors: { 
+                origin: '*',
+                methods: ["GET", "POST"]
+            },
+            transports: ["websocket"],
+            pingInterval: 25000,
+            pingTimeout: 60000,
+        });
         const settings = SettingsService.getSettings();
 
         this.io.on('connection', (socket) => {

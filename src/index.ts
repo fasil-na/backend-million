@@ -30,6 +30,7 @@ const server = http.createServer(app);
 SocketService.init(server);
 
 // Start server
-server.listen(PORT, () => {
+// server.listen(PORT, () => {
+server.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`🚀 Terminal Million Backend running on http://localhost:${PORT}`);
 });
