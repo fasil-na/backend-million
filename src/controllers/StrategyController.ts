@@ -16,6 +16,7 @@ export class StrategyController {
 
     static async runBacktest(req: Request, res: Response) {
         try {
+            console.log('calling bactest route---')
             const {
                 isLive, from, to, month, year, startYear, startMonth, endYear, endMonth,
                 pair = "B-BTC_USDT", resolution = "5"

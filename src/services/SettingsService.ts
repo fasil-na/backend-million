@@ -1,7 +1,4 @@
-import fs from 'fs';
-import { SETTINGS_FILE } from '../config/constants.js';
 import { SettingsModel } from '../models/Settings.js';
-import mongoose from 'mongoose';
 
 export interface AppSettings {
     isLiveMonitoring: boolean;
@@ -27,31 +24,24 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 export class SettingsService {
     private static currentSettings: AppSettings | null = null;
-    private static migrated = false;
+    private static initialized = false;
 
-    private static async migrateIfNeeded() {
-        if (this.migrated) return;
+    private static async initializeDBIfNeeded() {
+        if (this.initialized) return;
         try {
             const count = await SettingsModel.countDocuments();
-            if (count === 0 && fs.existsSync(SETTINGS_FILE)) {
-                console.log("[Migration] No settings in MongoDB found. Migrating from settings.json...");
-                const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
-                const settingsFromJSON = JSON.parse(data);
-                await SettingsModel.create({ ...DEFAULT_SETTINGS, ...settingsFromJSON });
-                console.log("[Migration] Settings migrated to MongoDB.");
-                fs.renameSync(SETTINGS_FILE, `${SETTINGS_FILE}.bak`);
-            } else if (count === 0) {
-                console.log("[Migration] First time setup: creating default settings in MongoDB.");
+            if (count === 0) {
+                console.log("[Settings] First time setup: creating default settings in MongoDB.");
                 await SettingsModel.create(DEFAULT_SETTINGS);
             }
         } catch (e) {
-            console.error("[Migration] Error migrating settings:", e);
+            console.error("[Settings] Error initializing settings:", e);
         }
-        this.migrated = true;
+        this.initialized = true;
     }
 
     static async init() {
-        await this.migrateIfNeeded();
+        await this.initializeDBIfNeeded();
         try {
             const settings = await SettingsModel.findOne().lean();
             if (settings) {
@@ -69,7 +59,6 @@ export class SettingsService {
 
     static getSettings(): AppSettings {
         if (!this.currentSettings) {
-            // This should ideally not happen if init() is called on startup
             return DEFAULT_SETTINGS;
         }
         return this.currentSettings;

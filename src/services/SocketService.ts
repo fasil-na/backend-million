@@ -120,7 +120,6 @@ export class SocketService {
             if (!settings.isLiveMonitoring) {
                 return;
             }
-
             const { pair, initialCapital, leverage, selectedStrategyId } = settings;
             const todayStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);
             const from = todayStart - (24 * 60 * 60); // Fetch 24h history for indicator stability
@@ -153,6 +152,7 @@ export class SocketService {
                             if (!pos) {
                                 console.log("[Autonomous] No cached position, fetching from API...");
                                 const positions = await TradeService.getPositions();
+                         
                                 if (positions === null) {
                                     console.log("Skipping trade due to API failure");
                                     return;
