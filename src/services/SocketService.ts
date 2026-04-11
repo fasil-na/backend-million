@@ -79,8 +79,16 @@ export class SocketService {
             if (existingIdx !== -1) {
                 this.candles[existingIdx] = data; // Update current tick
             } else {
+                const isNewCandleTrigger = this.candles.length > 0;
                 this.candles.push(data); // New candle started
                 if (this.candles.length > 1000) this.candles.shift();
+
+                // Trigger execution ONE time when a new candle begins (meaning the previous one closed)
+                if (isNewCandleTrigger && settings.isLiveMonitoring) {
+                    console.log(`✅ Candle Closed (${settings.timeInterval}m interval). Running strategies...`);
+                    // Don't await it to avoid blocking the socket event loop, or await it if strict order is needed
+                    this.executeLiveStrategy().catch(e => console.error("Strategy Execution Error:", e));
+                }
             }
 
             this.io.emit('candlestick', data);
@@ -88,14 +96,8 @@ export class SocketService {
 
             // 1. Real-time Monitoring (Check SL hit on every tick)
             if (settings.isLiveMonitoring) {
-                this.monitorRealTimeSL(data);
+                await this.monitorRealTimeSL(data);
             }
-
-            if (this.lastCandleTime !== null && data.time > this.lastCandleTime && settings.isLiveMonitoring ) {
-                console.log(`✅ Candle Closed at ${new Date(this.lastCandleTime).toISOString()}. Running strategies...`);
-                await this.executeLiveStrategy();
-            }
-            this.lastCandleTime = data.time;
         });
 
         coinDCXSocket.on('df-position-update', (positions: any[]) => {
@@ -193,10 +195,10 @@ export class SocketService {
 
                     // 1.5 Manage Active Paper Trades (Trailing SL update only)
                     if (settings.isPaperTrading) {
-                        const activePaperTrade = PaperTradeService.getActiveTrade();
+                        const activePaperTrade = await PaperTradeService.getActiveTrade();
                         if (activePaperTrade) {
                             OpeningBreakoutStrategy.updateTrailingSL(activePaperTrade, lastCandle);
-                            PaperTradeService.saveTrade(activePaperTrade);
+                            await PaperTradeService.saveTrade(activePaperTrade);
                             this.io.emit('paper-trade-update', activePaperTrade);
                             return; // Still in paper trade, don't check for new signal
                         }
@@ -221,7 +223,7 @@ export class SocketService {
                         // Handle Paper Trade Entry
                         if (settings.isPaperTrading) {
                             latest.type = 'auto';
-                            PaperTradeService.saveTrade(latest);
+                            await PaperTradeService.saveTrade(latest);
                             console.log("📄 New Paper Trade Opened:", latest);
                         }
                         
@@ -242,11 +244,11 @@ export class SocketService {
         }
     }
 
-    private static monitorRealTimeSL(tick: Candle) {
+    private static async monitorRealTimeSL(tick: Candle) {
         try {
             const settings = SettingsService.getSettings();
             if (settings.isPaperTrading) {
-                const activePaperTrade = PaperTradeService.getActiveTrade();
+                const activePaperTrade = await PaperTradeService.getActiveTrade();
                 if (activePaperTrade && activePaperTrade.status === 'open') {
                     let exited = false;
                     const currentPrice = tick.close;
@@ -272,7 +274,7 @@ export class SocketService {
                         activePaperTrade.fee = fee;
                         console.log(`📄 Real-time Paper Trade Closed at ${currentPrice}:`, activePaperTrade);
                         
-                        PaperTradeService.saveTrade(activePaperTrade);
+                        await PaperTradeService.saveTrade(activePaperTrade);
                         this.io.emit('paper-trade-update', activePaperTrade);
                     }
                 }

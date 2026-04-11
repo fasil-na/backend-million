@@ -52,7 +52,7 @@ export class TradeController {
             
    
             // Record in paper trade history
-            PaperTradeService.saveTrade({
+            await PaperTradeService.saveTrade({
                 entryTime: new Date().toISOString(),
                 direction: side,
                 pair: pair || settings.pair,

@@ -11,9 +11,9 @@ export class SettingsController {
         }
     }
 
-    static updateSettings(req: Request, res: Response) {
+    static async updateSettings(req: Request, res: Response) {
         try {
-            const settings = SettingsService.saveSettings(req.body);
+            const settings = await SettingsService.saveSettings(req.body);
             res.json(settings);
         } catch (error: any) {
             res.status(500).json({ error: error.message });

@@ -5,6 +5,6 @@
   "leverage": 1,
   "timeInterval": "1",
   "pair": "B-BTC_USDT",
-  "initialCapital": 1000,
+  "initialCapital": 100,
   "selectedStrategyId": "opening-breakout"
 }

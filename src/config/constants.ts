@@ -1,6 +1,8 @@
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +26,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 export const PAPER_TRADES_FILE = path.join(DATA_DIR, 'paperTrades.json');
 export const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+export const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/million';
 
 export const DEFAULT_PAIR = 'B-BTC_USDT';
 export const DEFAULT_RESOLUTION = '1m';
