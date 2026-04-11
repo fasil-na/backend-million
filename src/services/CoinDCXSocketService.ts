@@ -55,7 +55,7 @@ export class CoinDCXSocketService extends EventEmitter {
 
         this.socket.on('connect_error', (error) => {
             console.error('CoinDCX Socket Connection Error:', error.message);
-            this.emit('error', error);
+            this.emit('socket_error', error);
         });
 
         this.registerListeners();

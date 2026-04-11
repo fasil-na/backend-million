@@ -18,9 +18,12 @@ export class PaperTradeService {
 
     static async saveTrade(trade: Trade) {
         try {
+            // Strip _id and __v to prevent Mongoose from throwing immutable field errors
+            const { _id, __v, ...updateData } = trade as any;
+            
             await TradeModel.findOneAndUpdate(
                 { entryTime: trade.entryTime },
-                trade,
+                updateData,
                 { upsert: true, new: true }
             );
         } catch (e) {

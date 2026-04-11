@@ -4,11 +4,12 @@ import { PaperTradeService } from '../services/PaperTradeService.js';
 export class PaperTradeController {
     static async record(req: Request, res: Response) {
         try {
+            console.log('hiting-------')
             const { trade } = req.body;
             if (!trade) return res.status(400).json({ error: 'Trade data required' });
 
             await PaperTradeService.saveTrade(trade);
-            res.json({ success: true, trade });
+            return res.json({ success: true, trade });
         } catch (err: any) {
             res.status(500).json({ error: err.message });
         }

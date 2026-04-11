@@ -74,7 +74,7 @@ export class TradeController {
                 });
             }
             
-            res.json(result);
+           return res.json(result);
         } catch (error: any) {
             console.error('Trade Execution Error:', error.message);
             res.status(500).json({ error: error.message });
