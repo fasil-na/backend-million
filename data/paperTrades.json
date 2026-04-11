@@ -5,11 +5,41 @@
     "pair": "BTCUSDT",
     "entryPrice": 72792,
     "units": 0.01373777,
-    "sl": 72784.87857142856,
+    "sl": 72795.77857142857,
+    "status": "closed",
+    "profit": -0.34810113815076293,
+    "type": "manual",
+    "lastHigh": 72808.3,
+    "trailingCount": 4,
+    "exitPrice": 72795.77857142857,
+    "exitTime": "2026-04-11T11:40:01.385Z",
+    "exitReason": "SL Hit (Real-time Tick)",
+    "fee": 0.4000102833650429
+  },
+  {
+    "entryTime": "2026-04-11T11:39:11.111Z",
+    "direction": "buy",
+    "pair": "BTCUSDT",
+    "entryPrice": 72802.4,
+    "units": 0.01373581,
+    "sl": 72793.62857142856,
+    "status": "closed",
+    "profit": -0.5204585533281028,
+    "type": "manual",
+    "exitPrice": 72793.62857142856,
+    "exitTime": "2026-04-11T11:41:06.402Z",
+    "exitReason": "SL Hit (Real-time Tick)",
+    "fee": 0.39997587704234283
+  },
+  {
+    "entryTime": "2026-04-11T11:44:17.467Z",
+    "direction": "buy",
+    "pair": "BTCUSDT",
+    "entryPrice": 72800,
+    "units": 0.01373626,
+    "sl": 72792.24285714286,
     "status": "open",
     "profit": 0,
-    "type": "manual",
-    "lastHigh": 72797.4,
-    "trailingCount": 1
+    "type": "manual"
   }
 ]
