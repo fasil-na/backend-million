@@ -10,7 +10,9 @@ import type { Candle, Trade } from '../types/index.js';
 import { SettingsService } from './SettingsService.js';
 import { TradeService } from './TradeService.js';
 import { CoinDCXApiService } from './CoinDCXApiService.js';
+import { PaperTradeService } from './PaperTradeService.js';
 import { OpeningBreakoutStrategy } from '../strategies/OpeningBreakoutStrategy.js';
+import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 
 export class SocketService {
     private static io: SocketIOServer;
@@ -176,6 +178,41 @@ export class SocketService {
                         }
                     }
 
+                    // 1.5 Manage Active Paper Trades
+                    if (settings.isPaperTrading) {
+                        const activePaperTrade = PaperTradeService.getActiveTrade();
+                        if (activePaperTrade) {
+                            OpeningBreakoutStrategy.updateTrailingSL(activePaperTrade, lastCandle);
+                            
+                            // Check for Exit (SL Hit)
+                            let exited = false;
+                            if (activePaperTrade.direction === 'buy') {
+                                if (activePaperTrade.sl !== undefined && lastCandle.low <= activePaperTrade.sl) {
+                                    activePaperTrade.exitPrice = activePaperTrade.sl;
+                                    exited = true;
+                                }
+                            } else {
+                                if (activePaperTrade.sl !== undefined && lastCandle.high >= activePaperTrade.sl) {
+                                    activePaperTrade.exitPrice = activePaperTrade.sl;
+                                    exited = true;
+                                }
+                            }
+
+                            if (exited) {
+                                activePaperTrade.status = 'closed';
+                                activePaperTrade.exitTime = new Date().toISOString();
+                                activePaperTrade.exitReason = 'SL hit (Paper)';
+                                const { profit, fee } = calculateTradeProfit(activePaperTrade, activePaperTrade.exitPrice!, 0.0002);
+                                activePaperTrade.profit = profit;
+                                activePaperTrade.fee = fee;
+                                console.log("📄 Paper Trade Closed:", activePaperTrade);
+                            }
+                            
+                            PaperTradeService.saveTrade(activePaperTrade);
+                            if (!exited) return; // Still in paper trade, don't check for new signal
+                        }
+                    }
+
                     // 2. Check for New Signal if not in position
                     const result = strategy.run(this.candles, {
                         type: 'live',
@@ -192,6 +229,14 @@ export class SocketService {
                         console.log("🚀 NEW STRATEGY SIGNAL:", latest);
                         this.io.emit('strategy-signal', { pair, trade: latest });
                         
+                        // Handle Paper Trade Entry
+                        if (settings.isPaperTrading) {
+                            latest.type = 'auto';
+                            PaperTradeService.saveTrade(latest);
+                            console.log("📄 New Paper Trade Opened:", latest);
+                        }
+                        
+                        // Handle Real Trade Entry
                         if (settings.isLiveTrading) {
                             await TradeService.executeFutureOrder({
                                 ...latest,

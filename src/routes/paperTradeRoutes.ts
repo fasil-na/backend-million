@@ -5,5 +5,7 @@ const router = Router();
 
 router.post('/', PaperTradeController.record);
 router.get('/', PaperTradeController.list);
+router.delete('/clear', PaperTradeController.clear);
+router.delete('/:entryTime', PaperTradeController.delete);
 
 export default router;

@@ -121,6 +121,8 @@ export class CoinDCXSocketService extends EventEmitter {
 
                 if (candleData && (candleData.open_time || candleData.t)) {
                     // Map to common format expected by frontend
+                    // let time = candleData.open_time || candleData.t;
+                    // if (time < 10000000000) time *= 1000; // Convert seconds to milliseconds
                     const formattedCandle = {
                         time: candleData.open_time || candleData.t,
                         open: parseFloat(candleData.open || candleData.o),

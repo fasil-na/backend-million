@@ -171,6 +171,7 @@ console.log(type,'type-----')
                 const move = candle.high - lastHigh;
                 trade.sl = (trade.sl || trade.entryPrice) + move;
                 trade.lastHigh = candle.high;
+                trade.trailingCount = (trade.trailingCount || 0) + 1;
             }
         } else {
             const lastLow = trade.lastLow ?? trade.entryPrice;
@@ -178,6 +179,7 @@ console.log(type,'type-----')
                 const move = lastLow - candle.low;
                 trade.sl = (trade.sl || trade.entryPrice) - move;
                 trade.lastLow = candle.low;
+                trade.trailingCount = (trade.trailingCount || 0) + 1;
             }
         }
     }

@@ -2,6 +2,7 @@ import { type Request, type Response } from 'express';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import { TradeService } from '../services/TradeService.js';
 import { SettingsService } from '../services/SettingsService.js';
+import { PaperTradeService } from '../services/PaperTradeService.js';
 import { calculateATR } from '../strategies/StrategyUtils.js';
 
 export class TradeController {
@@ -47,14 +48,32 @@ export class TradeController {
             const quantityNum = (capital * leverage) / parseFloat(price || "1");
             const quantity = quantityNum.toFixed(targetPrecision).toString();
 
-            const result = await TradeService.executeFutureOrder({
+            let result: any = { message: 'Trade recorded in paper history (Real execution disabled)' };
+            
+   
+            // Record in paper trade history
+            PaperTradeService.saveTrade({
+                entryTime: new Date().toISOString(),
                 direction: side,
                 pair: pair || settings.pair,
                 entryPrice: Number(price),
                 units: Number(quantity),
-                stop_loss_price: calculatedSL > 0 ? calculatedSL : undefined
+                sl: calculatedSL > 0 ? calculatedSL : undefined,
+                status: 'open',
+                profit: 0,
+                type: 'manual'
             });
 
+                     if (settings.isLiveTrading) {
+                result = await TradeService.executeFutureOrder({
+                    direction: side,
+                    pair: pair || settings.pair,
+                    entryPrice: Number(price),
+                    units: Number(quantity),
+                    stop_loss_price: calculatedSL > 0 ? calculatedSL : undefined
+                });
+            }
+            
             res.json(result);
         } catch (error: any) {
             console.error('Trade Execution Error:', error.message);

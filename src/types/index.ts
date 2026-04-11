@@ -18,6 +18,9 @@ export interface Trade {
     lastLow?: number | undefined;
     units?: number | undefined; 
     fee?: number | undefined;
+    trailingCount?: number | undefined;
+    type?: 'manual' | 'auto' | undefined;
+    pair?: string | undefined;
 }
 
 export interface Candle {

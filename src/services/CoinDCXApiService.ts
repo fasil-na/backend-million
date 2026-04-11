@@ -27,6 +27,14 @@ export class CoinDCXApiService {
         const { pair, ...rest } = params;
         const formattedPair = formatPair(pair);
         const response = await axios.get(COINDCX_URL, { params: { ...rest, pair: formattedPair, pcode: 'f' } });
+        
+        if (response.data && Array.isArray(response.data.data)) {
+            response.data.data = response.data.data.map((c: any) => ({
+                ...c,
+                time: c.time < 10000000000 ? c.time * 1000 : c.time
+            }));
+        }
+        
         return response.data;
     }
 }
