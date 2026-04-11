@@ -1,21 +1,23 @@
 export interface Trade {
-    rangeHigh?: number;
-    rangeLow?: number;
-    breakoutTime?: string;
+    rangeHigh?: number | undefined;
+    rangeLow?: number | undefined;
+    breakoutTime?: string | undefined;
     entryTime: string;
-    exitTime?: string;
+    exitTime?: string | undefined;
     direction: 'buy' | 'sell';
     entryPrice: number;
-    exitPrice?: number;
-    sl?: number;
-    tp?: number;
+    exitPrice?: number | undefined;
+    sl?: number | undefined;
+    tp?: number | undefined;
+    stop_loss_price?: number | undefined;
+    take_profit_price?: number | undefined;
     status: 'open' | 'closed';
     profit: number;
-    exitReason?: string;
-    lastHigh?: number;
-    lastLow?: number;
-    units?: number; // position size based on capital
-    fee?: number;   // total fees for this trade
+    exitReason?: string | undefined;
+    lastHigh?: number | undefined;
+    lastLow?: number | undefined;
+    units?: number | undefined; 
+    fee?: number | undefined;
 }
 
 export interface Candle {

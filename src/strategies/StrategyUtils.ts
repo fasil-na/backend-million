@@ -43,6 +43,38 @@ export function calculateTradeProfit(
     };
 }
 
+export function calculateATR(candles: Candle[], period = 14): number {
+    if (candles.length <= period) return 0;
+    let trs: number[] = [];
+    for (let i = candles.length - period; i < candles.length; i++) {
+        const c = candles[i];
+        const prev = candles[i - 1];
+        if (!c || !prev) continue;
+        const tr = Math.max(
+            c.high - c.low,
+            Math.abs(c.high - prev.close),
+            Math.abs(c.low - prev.close)
+        );
+        trs.push(tr);
+    }
+    return trs.reduce((a, b) => a + b, 0) / (trs.length || 1);
+}
+
+export function formatPair(pair: string): string {
+    if (pair.startsWith('B-')) return pair;
+    
+    let formatted = pair;
+    if (!formatted.includes('_')) {
+        if (formatted.endsWith('USDT')) {
+            formatted = formatted.replace('USDT', '_USDT');
+        } else if (formatted.endsWith('INR')) {
+            formatted = formatted.replace('INR', '_INR');
+        }
+    }
+    
+    return `B-${formatted}`;
+}
+
 
 // export function calculatePositionSize({
 //     capital,

@@ -1,10 +1,12 @@
 import axios from 'axios';
 import { COINDCX_URL } from '../config/constants.js';
+import { formatPair } from '../strategies/StrategyUtils.js';
 
 export class CoinDCXApiService {
     static async getInstrumentLeverage(pair: string): Promise<number> {
         try {
-            const url = `https://api.coindcx.com/exchange/v1/derivatives/futures/data/instrument?pair=${pair}&margin_currency_short_name=USDT`;
+            const formattedPair = formatPair(pair);
+            const url = `https://api.coindcx.com/exchange/v1/derivatives/futures/data/instrument?pair=${formattedPair}&margin_currency_short_name=USDT`;
             const response = await axios.get(url);
             if (response.data && response.data.instrument) {
                 return response.data.instrument.max_leverage_long || 1;
@@ -22,7 +24,9 @@ export class CoinDCXApiService {
     }
 
     static async getCandlesticks(params: any) {
-        const response = await axios.get(COINDCX_URL, { params: { ...params, pcode: 'f' } });
+        const { pair, ...rest } = params;
+        const formattedPair = formatPair(pair);
+        const response = await axios.get(COINDCX_URL, { params: { ...rest, pair: formattedPair, pcode: 'f' } });
         return response.data;
     }
 }

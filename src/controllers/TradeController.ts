@@ -1,6 +1,8 @@
 import { type Request, type Response } from 'express';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import { TradeService } from '../services/TradeService.js';
+import { SettingsService } from '../services/SettingsService.js';
+import { calculateATR } from '../strategies/StrategyUtils.js';
 
 export class TradeController {
     static async execute(req: Request, res: Response) {
@@ -22,17 +24,35 @@ export class TradeController {
                 return res.status(400).json({ error: 'Insufficient capital (Bankruptcy)' });
             }
 
+            const settings = SettingsService.getSettings();
+            const leverage = settings.leverage || 1;
+
+            // Fetch recent candles for ATR-based SL calculation
+            const now = Math.floor(Date.now() / 1000);
+            const candleRes = await CoinDCXApiService.getCandlesticks({
+                pair: pair || settings.pair,
+                resolution: '1',
+                from: now - 86400, // last 24 hours
+                to: now
+            });
+
+            let calculatedSL = 0;
+            if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
+                const atr = calculateATR(candleRes.data, 14);
+                const entryPrice = parseFloat(price || "0");
+                calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
+            }
+
             const targetPrecision = marketDetails.target_currency_precision;
-            const quantityNum = capital / parseFloat(price || "1");
+            const quantityNum = (capital * leverage) / parseFloat(price || "1");
             const quantity = quantityNum.toFixed(targetPrecision).toString();
 
-            const result = await TradeService.executeOrder({
-                apiKey,
-                apiSecret,
-                side,
-                market: pair || 'DOGEINR',
-                price,
-                quantity
+            const result = await TradeService.executeFutureOrder({
+                direction: side,
+                pair: pair || settings.pair,
+                entryPrice: Number(price),
+                units: Number(quantity),
+                stop_loss_price: calculatedSL > 0 ? calculatedSL : undefined
             });
 
             res.json(result);
@@ -51,7 +71,7 @@ export class TradeController {
                 return res.status(400).json({ error: 'Backend API Key and Secret are not configured' });
             }
 
-            const balances = await TradeService.getBalances(apiKey, apiSecret);
+            const balances = await TradeService.getBalances();
             res.json(balances);
         } catch (error: any) {
             res.status(500).json({ error: error.message });

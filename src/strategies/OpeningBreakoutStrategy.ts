@@ -12,18 +12,21 @@ export class OpeningBreakoutStrategy implements Strategy {
     id = 'opening-breakout';
     name = 'Opening Breakout';
     description = 'Trades based on the high/low of an opening time window with EMA and ATR filters.';
+    run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): { trades: Trade[], finalBalance: number, activeTrade?: Trade | null } | { matched: boolean } {
+        const { type = 'backtest', capital = 1000 } = params;
+console.log(type,'type-----')
+        if (type === 'live') {
+            const result = this.checkSignal(candles, params);
+            return result;
+        }
 
-    run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): { trades: Trade[], finalBalance: number } {
-        if (candles.length < 50) return { trades: [], finalBalance: params.capital || 1000 };
+        if (candles.length < 20) return { trades: [], finalBalance: capital };
 
         const {
-            capital = 1000,
-            maxPositionSize = 100, // 100%
-            atrMultiplierSL = 1,
             feeRate = 0.0002,
-            leverage = 1,
             simulationStartUnix = 0
         } = params;
+
 
 
         let currentBalance = capital;
@@ -36,28 +39,41 @@ export class OpeningBreakoutStrategy implements Strategy {
         let direction: 'buy' | 'sell' | null = null;
         let lastBreakoutTime: string | null = null;
         let subIdx = 0;
+        let lastDay: string | null = null;
+        let dayCandleCount = 0;
+        const openingWindow = 20; 
 
-        for (let i = 50; i < candles.length; i++) {
+        for (let i = 0; i < candles.length; i++) {
             const c = candles[i];
-            if (!c || (simulationStartUnix && c.time < simulationStartUnix * 1000)) continue;
-
-            // Bankruptcy Check
-            if (currentBalance <= 0) {
+              if (currentBalance <= 0) {
                 console.log("BANKRUPTCY: Balance hit 0, stopping strategy.");
                 break;
             }
 
+            if (!c) continue;
+            
             const time = dayjs(c.time).tz('Asia/Kolkata');
+            const currentDay = time.format('YYYY-MM-DD');
 
-            if (!rangeHigh && !rangeLow) {
-                const prev1 = candles[i - 1];
-                const prev2 = candles[i - 2];
-                if (prev1 && prev2) {
-                    rangeHigh = Math.max(prev1.high, prev2.high);
-                    rangeLow = Math.min(prev1.low, prev2.low);
-                }
+            // Reset range at the start of a new day
+            if (currentDay !== lastDay) {
+                lastDay = currentDay;
+                rangeHigh = null;
+                rangeLow = null;
+                dayCandleCount = 0;
             }
-            if (rangeHigh === null || rangeLow === null) continue;
+
+            dayCandleCount++;
+
+            // Define the opening range during the first 50 candles of the day
+            if (dayCandleCount <= openingWindow) {
+                if (rangeHigh === null || c.high > rangeHigh) rangeHigh = c.high;
+                if (rangeLow === null || c.low < rangeLow) rangeLow = c.low;
+                continue; // Cannot trade during the opening window
+            }
+
+            if (!rangeHigh || !rangeLow) continue;
+            if (simulationStartUnix && c.time < simulationStartUnix * 1000) continue;
 
             const ema20 = this.calculateEMA(closes, 20, i);
             const ema50 = this.calculateEMA(closes, 50, i);
@@ -92,15 +108,11 @@ export class OpeningBreakoutStrategy implements Strategy {
                 for (const sc of simulationPass) {
                     const scTime = dayjs(sc.time).tz('Asia/Kolkata');
 
+                    if (trailingSL) {
+                        OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
+                    }
+
                     if (trade.direction === 'buy') {
-                        if (trailingSL) {
-                            const lastHigh = trade.lastHigh ?? trade.entryPrice;
-                            if (sc.high > lastHigh) {
-                                const move = sc.high - lastHigh;
-                                trade.sl = (trade.sl || trade.entryPrice) + move;
-                                trade.lastHigh = sc.high;
-                            }
-                        }
                         // Check SL on 1m Low (more realistic liquidation)
                         if (trade.sl !== undefined && sc.low <= trade.sl) {
                             trade.exitPrice = trade.sl;
@@ -109,14 +121,6 @@ export class OpeningBreakoutStrategy implements Strategy {
                             trade.exitTime = scTime.toISOString();
                         }
                     } else {
-                        if (trailingSL) {
-                            const lastLow = trade.lastLow ?? trade.entryPrice;
-                            if (sc.low < lastLow) {
-                                const move = lastLow - sc.low;
-                                trade.sl = (trade.sl || trade.entryPrice) - move;
-                                trade.lastLow = sc.low;
-                            }
-                        }
                         // Check SL on 1m High
                         if (trade.sl !== undefined && sc.high >= trade.sl) {
                             trade.exitPrice = trade.sl;
@@ -140,48 +144,127 @@ export class OpeningBreakoutStrategy implements Strategy {
             }
 
             if (!waiting) {
-                if (c.high > rangeHigh && ema20 > ema50) {
-                    direction = 'buy';
-                    waiting = true;
-                    lastBreakoutTime = time.toISOString();
-                } else if (c.low < rangeLow && ema20 < ema50) {
-                    direction = 'sell';
+                const signal = this.getSignal(candles, i, rangeHigh, rangeLow);
+                if (signal) {
+                    direction = signal;
                     waiting = true;
                     lastBreakoutTime = time.toISOString();
                 }
             } else {
-                const entry = c.close;
-                const atr = this.calculateATR(candles, 14, i);
-                const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
-
-                const units = calculateUnits(entry, sl, {
-                    capital: currentBalance, // Use currentBalance for compounding
-                    maxPositionSize,
-                    feeRate,
-                    leverage
-                });
-
-                currentTrade = {
-                    rangeHigh,
-                    rangeLow,
-                    breakoutTime: lastBreakoutTime || time.toISOString(),
-                    entryTime: time.toISOString(),
-                    direction: direction!,
-                    entryPrice: entry,
-                    sl,
-                    status: 'open',
-                    profit: 0,
-                    lastHigh: entry,
-                    lastLow: entry,
-                    units
-                };
+                currentTrade = this.calculateEntryParams(c, direction!, candles, i, currentBalance, params);
                 waiting = false;
                 rangeHigh = null;
                 rangeLow = null;
             }
         }
 
-        return { trades: allTrades, finalBalance: currentBalance };
+        return { trades: allTrades, finalBalance: currentBalance, activeTrade: currentTrade };
+    }
+
+    /**
+     * Reusable Trailing Stop Loss function
+     */
+    public static updateTrailingSL(trade: Trade, candle: Candle): void {
+        if (trade.direction === 'buy') {
+            const lastHigh = trade.lastHigh ?? trade.entryPrice;
+            if (candle.high > lastHigh) {
+                const move = candle.high - lastHigh;
+                trade.sl = (trade.sl || trade.entryPrice) + move;
+                trade.lastHigh = candle.high;
+            }
+        } else {
+            const lastLow = trade.lastLow ?? trade.entryPrice;
+            if (candle.low < lastLow) {
+                const move = lastLow - candle.low;
+                trade.sl = (trade.sl || trade.entryPrice) - move;
+                trade.lastLow = candle.low;
+            }
+        }
+    }
+
+    private getSignal(candles: Candle[], i: number, rangeHigh: number | null, rangeLow: number | null): 'buy' | 'sell' | null {
+        if (!rangeHigh || !rangeLow) return null;
+        const c = candles[i];
+        if (!c) return null;
+
+        const closes = candles.map(candle => candle.close);
+        const ema20 = this.calculateEMA(closes, 20, i);
+        const ema50 = this.calculateEMA(closes, 50, i);
+        
+        if (Math.abs(ema20 - ema50) < 15) return null;
+
+        const body = Math.abs(c.close - c.open);
+        const range = c.high - c.low;
+        if (range <= 0 || body / range <= 0.6) return null;
+        if (c.volume <= this.avgVolume(candles, i) * 1.3) return null;
+        if (Math.abs(c.close - ema20) < 10) return null;
+
+        if (c.high > rangeHigh && ema20 > ema50) return 'buy';
+        if (c.low < rangeLow && ema20 < ema50) return 'sell';
+
+        return null;
+    }
+
+    private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
+        const { atrMultiplierSL = 1, maxPositionSize = 100, feeRate = 0.0002, leverage = 1 } = params;
+        const entry = c.close;
+        const atr = this.calculateATR(candles, 14, i);
+        const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+
+        const units = calculateUnits(entry, sl, {
+            capital: balance,
+            maxPositionSize,
+            feeRate,
+            leverage
+        });
+
+        return {
+            entryTime: dayjs(c.time).tz('Asia/Kolkata').toISOString(),
+            direction,
+            entryPrice: entry,
+            sl,
+            status: 'open',
+            profit: 0,
+            lastHigh: entry,
+            lastLow: entry,
+            units
+        };
+    }
+
+    private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
+        if (candles.length < 20) return { matched: false };
+        
+        const i = candles.length - 1;
+        const c = candles[i];
+        if (!c) return { matched: false };
+
+        let rangeHigh: number | null = null;
+        let rangeLow: number | null = null;
+        const time = dayjs(c.time).tz('Asia/Kolkata');
+        const currentDay = time.format('YYYY-MM-DD');
+        const openingWindow = 20;
+
+        let dayCandleCount = 0;
+        for (const candle of candles) {
+            const candleTime = dayjs(candle.time).tz('Asia/Kolkata');
+            if (candleTime.format('YYYY-MM-DD') === currentDay) {
+                dayCandleCount++;
+                if (dayCandleCount <= openingWindow) {
+                    if (rangeHigh === null || candle.high > rangeHigh) rangeHigh = candle.high;
+                    if (rangeLow === null || candle.low < rangeLow) rangeLow = candle.low;
+                }
+            }
+        }
+
+        if (dayCandleCount <= openingWindow) return { matched: false };
+
+        const direction = this.getSignal(candles, i, rangeHigh, rangeLow);
+        if (direction) {
+            const trade = this.calculateEntryParams(c, direction, candles, i, params.capital || 1000, params);
+            return { matched: true, trade };
+        }
+
+        return { matched: false };
     }
 
     private calculateEMA(data: number[], period: number, index: number): number {

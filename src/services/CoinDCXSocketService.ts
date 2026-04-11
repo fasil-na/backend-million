@@ -143,6 +143,10 @@ export class CoinDCXSocketService extends EventEmitter {
             this.emit('new-trade', response.data);
         });
 
+        this.socket.on("df-position-update", (response) => {
+            this.emit('df-position-update', response.data);
+        });
+
     }
 
     public disconnect() {

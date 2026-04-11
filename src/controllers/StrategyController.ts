@@ -65,14 +65,17 @@ export class StrategyController {
                         const candles = resMain.data.sort((a: Candle, b: Candle) => a.time - b.time);
                         const subCandles = Array.isArray(resSub.data) ? resSub.data.sort((a: Candle, b: Candle) => a.time - b.time) : [];
 
-                        const strategy = strategies[req.body.strategyId || 'opening-breakout'];
+                        const strategy = strategies[req.body.strategyId || 'opening-breakout'] as any;
                         if (strategy) {
-                            const { trades, finalBalance } = strategy.run(candles, {
-                                ...req.body, leverage, capital: currentCapital, simulationStartUnix: simStart
+                            const result = strategy.run(candles, {
+                                ...req.body, leverage, capital: currentCapital, simulationStartUnix: simStart, type: 'backtest'
                             }, subCandles);
-                            allTrades.push(...trades);
-                            currentCapital = finalBalance;
-                            if (currentCapital <= 0) break;
+                            
+                            if ('trades' in result) {
+                                allTrades.push(...result.trades);
+                                currentCapital = result.finalBalance;
+                                if (currentCapital <= 0) break;
+                            }
                         }
                     }
                 } catch (err) {
