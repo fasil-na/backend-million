@@ -1,5 +1,5 @@
 {
-  "isLiveMonitoring": false,
+  "isLiveMonitoring": true,
   "isPaperTrading": true,
   "isLiveTrading": false,
   "leverage": 20,
