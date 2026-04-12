@@ -8,19 +8,6 @@ import { calculateATR } from '../strategies/StrategyUtils.js';
 export class TradeController {
     static async execute(req: Request, res: Response) {
         try {
-
-            await PaperTradeService.saveTrade({
-                entryTime: new Date().toISOString(),
-                direction: "buy",
-                pair: '7',
-                entryPrice: 8,
-                units: 9,
-                sl: 0,
-                status: 'open',
-                profit: 0,
-                type: 'manual'
-            });
-            return res.json({ message: 'Trade recorded in paper history (Real execution disabled)' });
             const apiKey = process.env.COINDCX_API_KEY;
             const apiSecret = process.env.COINDCX_API_SECRET;
             const { side, pair, price, capital = 100 } = req.body;
