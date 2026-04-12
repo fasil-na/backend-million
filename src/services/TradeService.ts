@@ -7,11 +7,13 @@ import type { Trade } from '../types/index.js';
 export class TradeService {
     private static get credentials() {
         return {
-            apiKey: process.env.COINDCX_API_KEY || '',
-            apiSecret: process.env.COINDCX_API_SECRET || ''
+            // apiKey: process.env.COINDCX_API_KEY || '',
+            // apiSecret: process.env.COINDCX_API_SECRET || ''
+            apiKey: "1fcc845cd10f6ebbefde4ac3f5718207457f26779058521e",
+            apiSecret: "4dfdbe34c48cd3fcb39939d7d69561362def31a9f7f0edebeb45705443122c98"
         };
     }
-    
+
     private static baseUrl = "https://api.coindcx.com";
 
 
@@ -26,8 +28,8 @@ export class TradeService {
         }
 
         const settings = SettingsService.getSettings();
-        const timeStamp = Math.floor(Date.now()); 
-        
+        const timeStamp = Math.floor(Date.now());
+
         const rawPair = trade.pair || settings.pair;
         const pair = formatPair(rawPair);
         const body = {
@@ -49,7 +51,7 @@ export class TradeService {
             }
         };
 
-        console.log(body,'body======')
+        console.log(body, 'body======')
 
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');

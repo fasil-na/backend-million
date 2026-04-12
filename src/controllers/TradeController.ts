@@ -8,8 +8,10 @@ import { calculateATR } from '../strategies/StrategyUtils.js';
 export class TradeController {
     static async execute(req: Request, res: Response) {
         try {
-            const apiKey = process.env.COINDCX_API_KEY;
-            const apiSecret = process.env.COINDCX_API_SECRET;
+            // const apiKey = process.env.COINDCX_API_KEY;
+            // const apiSecret = process.env.COINDCX_API_SECRET;
+            const apiKey = "1fcc845cd10f6ebbefde4ac3f5718207457f26779058521e";
+            const apiSecret = "4dfdbe34c48cd3fcb39939d7d69561362def31a9f7f0edebeb45705443122c98";
             const { side, pair, price, capital = 100 } = req.body;
 
             if (!apiKey || !apiSecret) {
@@ -49,8 +51,8 @@ export class TradeController {
             const quantity = quantityNum.toFixed(targetPrecision).toString();
 
             let result: any = { message: 'Trade recorded in paper history (Real execution disabled)' };
-            
-   
+
+
             // Record in paper trade history
             await PaperTradeService.saveTrade({
                 entryTime: new Date().toISOString(),
@@ -64,7 +66,7 @@ export class TradeController {
                 type: 'manual'
             });
 
-                     if (settings.isLiveTrading) {
+            if (settings.isLiveTrading) {
                 result = await TradeService.executeFutureOrder({
                     direction: side,
                     pair: pair || settings.pair,
@@ -73,8 +75,8 @@ export class TradeController {
                     stop_loss_price: calculatedSL > 0 ? calculatedSL : undefined
                 });
             }
-            
-           return res.json(result);
+
+            return res.json(result);
         } catch (error: any) {
             console.error('Trade Execution Error:', error.message);
             res.status(500).json({ error: error.message });
