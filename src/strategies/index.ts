@@ -8,7 +8,9 @@ export interface Strategy {
 }
 
 import { OpeningBreakoutStrategy } from './OpeningBreakoutStrategy.js';
+import { EmaCrossoverStrategy } from './EmaCrossoverStrategy.js';
 
 export const strategies: Record<string, Strategy> = {
     'opening-breakout': new OpeningBreakoutStrategy(),
+    'ema-crossover': new EmaCrossoverStrategy(),
 };

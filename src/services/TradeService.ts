@@ -30,6 +30,7 @@ export class TradeService {
 
         const rawPair = trade.pair || settings.pair;
         const pair = formatPair(rawPair);
+        
         const body = {
             "timestamp": timeStamp,
             "order": {

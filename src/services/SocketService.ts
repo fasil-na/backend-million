@@ -223,7 +223,7 @@ export class SocketService {
                         // Handle Paper Trade Entry
                         if (settings.isPaperTrading) {
                             latest.type = 'auto';
-                            await PaperTradeService.saveTrade(latest);
+                            await PaperTradeService.saveTrade({pair,...latest});
                             console.log("📄 New Paper Trade Opened:", latest);
                         }
                         
