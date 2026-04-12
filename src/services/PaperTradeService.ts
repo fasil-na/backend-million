@@ -17,17 +17,24 @@ export class PaperTradeService {
     }
 
     static async saveTrade(trade: Trade) {
+        if (mongoose.connection.readyState !== 1) {
+            console.error("❌ MongoDB not connected. Cannot save paper trade.");
+            throw new Error("Database connection error");
+        }
         try {
             // Strip _id and __v to prevent Mongoose from throwing immutable field errors
             const { _id, __v, ...updateData } = trade as any;
-            
-            await TradeModel.findOneAndUpdate(
+
+            const result = await TradeModel.findOneAndUpdate(
                 { entryTime: trade.entryTime },
                 updateData,
                 { upsert: true, new: true }
             );
-        } catch (e) {
-            console.error("Error saving paper trade to MongoDB:", e);
+            console.log(`✅ Paper trade saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
+            return result;
+        } catch (e: any) {
+            console.error("❌ Error saving paper trade to MongoDB:", e.message);
+            throw e;
         }
     }
 

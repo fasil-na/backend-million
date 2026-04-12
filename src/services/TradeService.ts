@@ -7,10 +7,8 @@ import type { Trade } from '../types/index.js';
 export class TradeService {
     private static get credentials() {
         return {
-            // apiKey: process.env.COINDCX_API_KEY || '',
-            // apiSecret: process.env.COINDCX_API_SECRET || ''
-            apiKey: "1fcc845cd10f6ebbefde4ac3f5718207457f26779058521e",
-            apiSecret: "4dfdbe34c48cd3fcb39939d7d69561362def31a9f7f0edebeb45705443122c98"
+            apiKey: process.env.COINDCX_API_KEY || '',
+            apiSecret: process.env.COINDCX_API_SECRET || ''
         };
     }
 

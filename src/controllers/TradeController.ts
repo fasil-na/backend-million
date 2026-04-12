@@ -8,15 +8,9 @@ import { calculateATR } from '../strategies/StrategyUtils.js';
 export class TradeController {
     static async execute(req: Request, res: Response) {
         try {
-            // const apiKey = process.env.COINDCX_API_KEY;
-            // const apiSecret = process.env.COINDCX_API_SECRET;
-            const apiKey = "1fcc845cd10f6ebbefde4ac3f5718207457f26779058521e";
-            const apiSecret = "4dfdbe34c48cd3fcb39939d7d69561362def31a9f7f0edebeb45705443122c98";
+            const apiKey = process.env.COINDCX_API_KEY;
+            const apiSecret = process.env.COINDCX_API_SECRET;
             const { side, pair, price, capital = 100 } = req.body;
-
-            if (!apiKey || !apiSecret) {
-                return res.status(400).json({ error: 'Backend API Key and Secret are not configured' });
-            }
 
             const marketDetails = await CoinDCXApiService.getMarketDetails(pair);
             if (!marketDetails) {
@@ -53,6 +47,7 @@ export class TradeController {
             let result: any = { message: 'Trade recorded in paper history (Real execution disabled)' };
 
 
+            console.log(`[TradeController] 📝 Recording manual paper trade for ${pair}...`);
             // Record in paper trade history
             await PaperTradeService.saveTrade({
                 entryTime: new Date().toISOString(),
@@ -67,6 +62,9 @@ export class TradeController {
             });
 
             if (settings.isLiveTrading) {
+                if (!apiKey || !apiSecret) {
+                    return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
+                }
                 result = await TradeService.executeFutureOrder({
                     direction: side,
                     pair: pair || settings.pair,
@@ -89,7 +87,7 @@ export class TradeController {
             const apiSecret = process.env.COINDCX_API_SECRET;
 
             if (!apiKey || !apiSecret) {
-                return res.status(400).json({ error: 'Backend API Key and Secret are not configured' });
+                return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Exchange API access' });
             }
 
             const balances = await TradeService.getBalances();
