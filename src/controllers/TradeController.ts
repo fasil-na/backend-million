@@ -33,9 +33,23 @@ export class TradeController {
 
             let calculatedSL = 0;
             if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
-                const atr = calculateATR(candleRes.data, 14);
+                console.log(candleRes.data,'candleRes.data,------')
+                let atr = calculateATR(candleRes.data, 14);
                 const entryPrice = parseFloat(price || "0");
+                
+                // Fallback: If ATR is 0 or too small, use 1% of entry price as a minimum buffer
+                if (atr === 0 || atr < (entryPrice * 0.001)) {
+                    console.log(`[TradeController] ⚠️ ATR calculation returned ${atr}, using fallback 1% SL.`);
+                    atr = entryPrice * 0.01;
+                }
+                
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
+                console.log(`[TradeController] 📊 SL Calculated: ${calculatedSL} (Entry: ${entryPrice}, ATR: ${atr}, Side: ${side})`);
+            } else {
+                console.log(`[TradeController] ⚠️ Failed to fetch candles for SL calculation, using fallback 1% SL.`);
+                const entryPrice = parseFloat(price || "0");
+                const fallbackAtr = entryPrice * 0.01;
+                calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - fallbackAtr : entryPrice + fallbackAtr;
             }
 
             const bankBalance = settings.bankBalance || 0;

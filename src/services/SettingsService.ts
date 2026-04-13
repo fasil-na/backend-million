@@ -10,6 +10,7 @@ export interface AppSettings {
     initialCapital: number;
     selectedStrategyId: string;
     bankBalance?: number;
+    activeTradeStatus:string
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -20,7 +21,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     timeInterval: '1',
     pair: 'B-BTC_USDT',
     initialCapital: 1000,
-    selectedStrategyId: 'opening-breakout'
+    selectedStrategyId: 'opening-breakout',
+    activeTradeStatus:"closed"
 };
 
 export class SettingsService {

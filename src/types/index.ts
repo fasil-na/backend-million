@@ -48,3 +48,12 @@ export interface BacktestResult {
         initialCapital: number;
     };
 }
+
+export type Position = {
+  id: string;
+  pair: string;
+  side: string;
+  entry_price: number;
+  stop_loss_price: number;
+  active_pos: number;
+};

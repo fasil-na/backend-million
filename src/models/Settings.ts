@@ -9,7 +9,8 @@ const settingsSchema = new mongoose.Schema({
     pair: { type: String, default: 'B-BTC_USDT' },
     initialCapital: { type: Number, default: 1000 },
     selectedStrategyId: { type: String, default: 'opening-breakout' },
-    bankBalance: { type: Number, default: 0 }
+    bankBalance: { type: Number, default: 0 },
+    activeTradeStatus: { type: String, default: 'closed' }
 }, {
     timestamps: true,
     // We only ever want one settings document for this app

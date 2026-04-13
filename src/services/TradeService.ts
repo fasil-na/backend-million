@@ -236,5 +236,37 @@ export class TradeService {
         }
         return null;
     }
+ static async  closePosition({positionId}:{positionId:string}) {
+        const { apiKey, apiSecret } = this.credentials;
+
+        if (!apiKey || !apiSecret) {
+            console.error("❌ CoinDCX API Key or Secret missing in .env. Skipping trade execution.");
+            return;
+        }
+                const timeStamp = Math.floor(Date.now()); 
+            const body = {
+            timestamp: timeStamp,
+            id:positionId
+        };
+        const payload = Buffer.from(JSON.stringify(body)).toString();
+        const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
+
+        try {
+            console.log(`[TradeService] 🚀 Exist  order for ${positionId}...`);
+            const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/positions/exit`, body, {
+                headers: {
+                    'X-AUTH-APIKEY': apiKey,
+                    'X-AUTH-SIGNATURE': signature,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            console.log("✅ CoinDCX Trade Executed Successfully:", JSON.stringify(response.data, null, 2));
+            return response.data;
+        } catch (error: any) {
+            console.error("❌ CoinDCX Trade Execution Failed:", error.response?.data || error.message);
+            throw error;
+        }
+    }
 }
 
