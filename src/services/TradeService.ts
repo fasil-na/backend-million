@@ -14,7 +14,48 @@ export class TradeService {
 
     private static baseUrl = "https://api.coindcx.com";
 
+    private static instrumentCache = new Map<string, any>();
 
+    static async getInstrumentDetails(pair: string) {
+        if (this.instrumentCache.has(pair)) {
+            return this.instrumentCache.get(pair);
+        }
+        try {
+            const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
+            const response = await axios.get(`${this.baseUrl}/exchange/v1/derivatives/futures/data/instrument?pair=${pair}&margin_currency_short_name=${marginCurrency}`);
+            const data = response.data.instrument;
+            if (data) {
+                this.instrumentCache.set(pair, data);
+                return data;
+            }
+        } catch (error: any) {
+            console.error(`❌ Failed to fetch instrument details for ${pair}:`, error.message);
+        }
+        return null;
+    }
+
+    public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
+        'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1 },
+        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 }
+    };
+
+    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy') {
+        const pair = formatPair(rawPair);
+        const staticData = this.STATIC_INSTRUMENTS[pair] || this.STATIC_INSTRUMENTS['B-BTC_USDT'];
+        
+        const maxLeverage = Math.min(leverage, staticData.maxLeverage);
+        
+        const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
+        const qty = Number(Number(rawQty).toFixed(qtyPrecision));
+
+        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        const tpPrice = customTp > 0 ? Number(Number(customTp).toFixed(pricePrecision)) : 0;
+        const slPrice = customSl > 0 ? Number(Number(customSl).toFixed(pricePrecision)) : 0;
+
+        const marginName = pair.includes('USDT') ? 'USDT' : 'INR';
+
+        return { pair, qty, maxLeverage, tpPrice, slPrice, marginName };
+    }
 
     // final excecution of trade
     static async executeFutureOrder(trade: Partial<Trade> & { pair?: string, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
@@ -26,31 +67,40 @@ export class TradeService {
         }
 
         const settings = SettingsService.getSettings();
-        const timeStamp = Math.floor(Date.now());
+        const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
-        const rawPair = trade.pair || settings.pair;
-        const pair = formatPair(rawPair);
-        
-        const body = {
-            "timestamp": timeStamp,
-            "order": {
-                "side": trade.direction?.toLowerCase(), // "buy" or "sell"
-                "pair": pair,
-                "order_type": "market_order",
-                "price": null,
-                "total_quantity": Number(trade.units),
-                "leverage": settings.leverage,
-                "notification": "no_notification",
-                "time_in_force": "good_till_cancel",
-                "hidden": false,
-                "post_only": false,
-                "margin_currency_short_name": pair.includes('USDT') ? "USDT" : "INR",
-                "take_profit_price": Number(trade.take_profit_price || trade.tp || 0),
-                "stop_loss_price": Number(trade.stop_loss_price || trade.sl || 0)
-            }
+       const balance= await this.getBalances()
+       console.log(balance,'balance------')
+        const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
+            trade.pair || settings.pair,
+            Number(trade.units),
+            trade.leverage || settings.leverage,
+            Number(trade.take_profit_price || trade.tp || 0),
+            Number(trade.stop_loss_price || trade.sl || 0),
+            trade.direction || 'buy'
+        );
+
+        const baseOrder: any = {
+            side: trade.direction?.toLowerCase() || 'buy',
+            pair: pair,
+            order_type: "market_order",
+            price:null,
+            total_quantity: qty,
+            leverage: maxLeverage,
+            notification: "no_notification",
+            time_in_force:null,
+            margin_currency_short_name: marginName
         };
 
-        console.log(body, 'body======')
+        if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
+        if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
+
+        const body = {
+            "timestamp": timeStamp,
+            "order": baseOrder
+        };
+
+        console.log(body, 'body======');
 
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
@@ -169,6 +219,22 @@ export class TradeService {
             console.error("❌ Failed to fetch balances:", error.response?.data || error.message);
             return null;
         }
+    }
+
+    static async syncLiveBalance(currency: string = 'USDT') {
+        const balances = await this.getBalances();
+        if (Array.isArray(balances)) {
+            const marginBalance = balances.find((b: any) => b.currency === currency);
+            if (marginBalance && marginBalance.balance !== undefined) {
+                // If locked balance exists, we may want to include it or just use available. Usually 'balance' represents the usable margin or total margin.
+                const totalBalance = Number(marginBalance.balance);
+                const { SettingsService } = await import('./SettingsService.js');
+                await SettingsService.saveSettings({ bankBalance: totalBalance });
+                console.log(`✅ Live Bank Balance Synced: ${totalBalance} ${currency}`);
+                return totalBalance;
+            }
+        }
+        return null;
     }
 }
 

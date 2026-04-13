@@ -9,6 +9,7 @@ export interface AppSettings {
     pair: string;
     initialCapital: number;
     selectedStrategyId: string;
+    bankBalance?: number;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {

@@ -12,10 +12,7 @@ export class TradeController {
             const apiSecret = process.env.COINDCX_API_SECRET;
             const { side, pair, price, capital = 100 } = req.body;
 
-            const marketDetails = await CoinDCXApiService.getMarketDetails(pair);
-            if (!marketDetails) {
-                return res.status(404).json({ error: `Market details not found for ${pair || 'DOGEINR'}` });
-            }
+            console.log(price,'price------')
 
             if (capital <= 0) {
                 return res.status(400).json({ error: 'Insufficient capital (Bankruptcy)' });
@@ -23,11 +20,12 @@ export class TradeController {
 
             const settings = SettingsService.getSettings();
             const leverage = settings.leverage || 1;
+            const activePair = pair || settings.pair;
 
             // Fetch recent candles for ATR-based SL calculation
             const now = Math.floor(Date.now() / 1000);
             const candleRes = await CoinDCXApiService.getCandlesticks({
-                pair: pair || settings.pair,
+                pair: activePair,
                 resolution: '1',
                 from: now - 86400, // last 24 hours
                 to: now
@@ -40,22 +38,34 @@ export class TradeController {
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
             }
 
-            const targetPrecision = marketDetails.target_currency_precision;
-            const quantityNum = (capital * leverage) / parseFloat(price || "1");
-            const quantity = quantityNum.toFixed(targetPrecision).toString();
+            const bankBalance = settings.bankBalance || 0;
+            const effectiveCapital = settings.isLiveTrading ? bankBalance : capital;
+            if(effectiveCapital <= 0){
+                return res.status(400).json({ error: 'Insufficient capital (Bankruptcy)' });
+            }
 
+            const rawPair = pair || settings.pair;
+            const parsedPrice = parseFloat(price || "1");
+            const staticData = TradeService.STATIC_INSTRUMENTS[rawPair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+            const minNotional = staticData.minNotional || 6;
+            const step = staticData.qtyStep;
+
+            // Calculate quantity purely based on minimum notional requirement (e.g. $6), safely rounded up to the exchange's step size.
+            const quantityNum = Math.ceil((minNotional / parsedPrice) / step) * step;
+console.log(quantityNum,'quantityNum======')
+            const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side);
+            console.log(formattedParams,'formattedParams----')
             let result: any = { message: 'Trade recorded in paper history (Real execution disabled)' };
 
-
-            console.log(`[TradeController] 📝 Recording manual paper trade for ${pair}...`);
+            console.log(`[TradeController] 📝 Recording manual paper trade for ${rawPair}...`);
             // Record in paper trade history
             await PaperTradeService.saveTrade({
                 entryTime: new Date().toISOString(),
                 direction: side,
-                pair: pair || settings.pair,
+                pair: formattedParams.pair,
                 entryPrice: Number(price),
-                units: Number(quantity),
-                sl: calculatedSL > 0 ? calculatedSL : undefined,
+                units: formattedParams.qty,
+                sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
                 status: 'open',
                 profit: 0,
                 type: 'manual'
@@ -67,10 +77,11 @@ export class TradeController {
                 }
                 result = await TradeService.executeFutureOrder({
                     direction: side,
-                    pair: pair || settings.pair,
+                    pair: formattedParams.pair,
                     entryPrice: Number(price),
-                    units: Number(quantity),
-                    stop_loss_price: calculatedSL > 0 ? calculatedSL : undefined
+                    units: formattedParams.qty,
+                    stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                    leverage: formattedParams.maxLeverage
                 });
             }
 

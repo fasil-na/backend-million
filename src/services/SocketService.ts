@@ -100,13 +100,23 @@ export class SocketService {
             }
         });
 
-        coinDCXSocket.on('df-position-update', (positions: any[]) => {
+        coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             const settings = SettingsService.getSettings();
             const pair = settings.pair;
             const pos = Array.isArray(positions) ? positions.find((p: any) => p.pair === pair) : null;
 
-            if (!pos || pos.active_pos === 0) {
+            const wasActive = !!this.currentPosition;
+            const isActive = !!pos && pos.active_pos !== 0;
+
+            if (!isActive) {
                 this.currentPosition = null;
+                if (wasActive && settings.isLiveTrading) {
+                    const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
+                    const newTotal = await TradeService.syncLiveBalance(marginCurrency);
+                    if (newTotal !== null) {
+                        this.io.emit('settings-update', SettingsService.getSettings());
+                    }
+                }
             } else {
                 this.currentPosition = pos;
             }
@@ -272,10 +282,13 @@ export class SocketService {
                         const { profit, fee } = calculateTradeProfit(activePaperTrade, activePaperTrade.exitPrice!, 0.0002);
                         activePaperTrade.profit = profit;
                         activePaperTrade.fee = fee;
-                        console.log(`📄 Real-time Paper Trade Closed at ${currentPrice}:`, activePaperTrade);
                         
                         await PaperTradeService.saveTrade(activePaperTrade);
                         this.io.emit('paper-trade-update', activePaperTrade);
+
+                        const newBankBalance = (settings.bankBalance || 0) + profit;
+                        await SettingsService.saveSettings({ bankBalance: newBankBalance });
+                        this.io.emit('settings-update', SettingsService.getSettings());
                     }
                 }
             }
