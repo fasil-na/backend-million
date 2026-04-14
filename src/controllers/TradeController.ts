@@ -33,7 +33,7 @@ export class TradeController {
 
             let calculatedSL = 0;
             if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
-                console.log(candleRes.data,'candleRes.data,------')
+                console.log(candleRes.data.length,'candleRes.data,------')
                 let atr = calculateATR(candleRes.data, 14);
                 const entryPrice = parseFloat(price || "0");
                 

@@ -23,7 +23,7 @@ console.log(type,'type-----')
         if (candles.length < 10) return { trades: [], finalBalance: capital };
 
         const {
-            feeRate = 0.0002,
+            feeRate = 0.0005,
             simulationStartUnix = 0
         } = params;
 
@@ -208,7 +208,7 @@ console.log(type,'type-----')
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0002, leverage = 1 } = params;
+        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = this.calculateATR(candles, 14, i);
         const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;

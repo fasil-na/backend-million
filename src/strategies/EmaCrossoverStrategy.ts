@@ -23,7 +23,7 @@ export class EmaCrossoverStrategy implements Strategy {
         if (candles.length < 50) return { trades: [], finalBalance: capital };
 
         const {
-            feeRate = 0.0002,
+            feeRate = 0.0005,
             simulationStartUnix = 0,
             trailingSL = true
         } = params;
@@ -170,7 +170,7 @@ export class EmaCrossoverStrategy implements Strategy {
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL = 1.5, maxPositionSize = 100, feeRate = 0.0002, leverage = 1 } = params;
+        const { atrMultiplierSL = 1.5, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = this.calculateATR(candles, 14, i);
         const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;

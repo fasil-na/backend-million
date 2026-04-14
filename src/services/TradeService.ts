@@ -69,8 +69,16 @@ export class TradeService {
         const settings = SettingsService.getSettings();
         const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
-       const balance= await this.getBalances()
-       console.log(balance,'balance------')
+//      const balances = await this.getBalances();
+// const wallet = balances.find((b: any) => b.currency === marginName);
+
+// if (wallet) {
+//     await SettingsService.saveSettings({
+//         liveBalance: Number(wallet.balance)
+//     });
+// }
+console.log(trade,'trade------++++((((((')
+
         const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
             trade.pair || settings.pair,
             Number(trade.units),
@@ -207,12 +215,16 @@ export class TradeService {
         const signature = crypto.createHmac('sha256', apiSecret).update(bodyString).digest('hex');
 
         try {
-            const response = await axios.post(`${this.baseUrl}/exchange/v1/users/balances`, bodyString, {
+            // Using GET method with headers as required by CoinDCX for this endpoint
+            const response = await axios.get(`${this.baseUrl}/exchange/v1/derivatives/futures/wallets`, {
                 headers: {
                     'X-AUTH-APIKEY': apiKey,
                     'X-AUTH-SIGNATURE': signature,
                     'Content-Type': 'application/json'
-                }
+                },
+                // Some environments/versions of axios might require the body in 'data' for GET requests 
+                // if the signature was generated based on it.
+                data: bodyString 
             });
             return response.data;
         } catch (error: any) {
@@ -223,8 +235,10 @@ export class TradeService {
 
     static async syncLiveBalance(currency: string = 'USDT') {
         const balances = await this.getBalances();
+        console.log(balances,'balances$$$$$$$$$$$')
         if (Array.isArray(balances)) {
-            const marginBalance = balances.find((b: any) => b.currency === currency);
+            const marginBalance = balances.find((b: any) => b.currency_short_name === currency);
+            console.log(marginBalance,'marginBalance-----******')
             if (marginBalance && marginBalance.balance !== undefined) {
                 // If locked balance exists, we may want to include it or just use available. Usually 'balance' represents the usable margin or total margin.
                 const totalBalance = Number(marginBalance.balance);
