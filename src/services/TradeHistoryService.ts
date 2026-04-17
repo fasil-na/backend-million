@@ -32,7 +32,7 @@ export class TradeHistoryService {
             const result = await TradeModel.findOneAndUpdate(
                 { entryTime: updateData.entryTime },
                 updateData,
-                { upsert: true, new: true }
+                { upsert: true, returnDocument: 'after' }
             );
             console.log(`✅ Trade history saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
             return result;

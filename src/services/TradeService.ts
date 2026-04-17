@@ -264,7 +264,7 @@ console.log(trade,'trade------++++((((((')
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
 
         try {
-            console.log(`[TradeService] 🚀 Exist  order for ${positionId}...`);
+            console.log(`[TradeService] 🚀 Exit order for ${positionId}...`);
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/positions/exit`, body, {
                 headers: {
                     'X-AUTH-APIKEY': apiKey,

@@ -32,7 +32,6 @@ export class MarketController {
         try {
             const { pair } = req.params;
             const leverage = await CoinDCXApiService.getInstrumentLeverage(pair as string);
-            console.log(leverage,'leverage--------')
             res.json({ leverage });
         } catch (error: any) {
             res.status(500).json({ error: error.message });

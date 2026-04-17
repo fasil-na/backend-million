@@ -70,7 +70,7 @@ export class SettingsService {
         this.currentSettings = updated;
 
         try {
-            await SettingsModel.findOneAndUpdate({}, updated, { upsert: true, new: true });
+            await SettingsModel.findOneAndUpdate({}, updated, { upsert: true, returnDocument: 'after' });
         } catch (err) {
             console.error('Failed to save settings to MongoDB:', err);
         }

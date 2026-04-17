@@ -17,12 +17,22 @@ export class CoinDCXSocketService extends EventEmitter {
     private subscriptions: Set<string> = new Set();
     private lastPrices: Map<string, any> = new Map();
     private lastBalances: any[] = [];
+    private lastCandleTime: number = Date.now();
 
     constructor(config: SocketConfig) {
         super();
         this.apiKey = config.apiKey;
         this.apiSecret = config.apiSecret;
         this.endpoint = "wss://stream.coindcx.com/";
+
+        setInterval(() => {
+            const diff = Date.now() - this.lastCandleTime;
+            if (diff > 60000 && this.subscriptions.size > 0) {
+                console.error("🚨 No candle data detected for 60s! Reconnecting socket...");
+                this.disconnect();
+                this.connect();
+            }
+        }, 30000);
     }
 
     public connect() {
@@ -39,6 +49,8 @@ export class CoinDCXSocketService extends EventEmitter {
             timeout: 20000,
             query: { EIO: '3' }
         });
+
+        this.socket.removeAllListeners();
 
         this.socket.on('connect', () => {
             console.log('Connected to CoinDCX Socket');
@@ -114,9 +126,11 @@ export class CoinDCXSocketService extends EventEmitter {
         });
 
         this.socket.on("candlestick", (response) => {
+            this.lastCandleTime = Date.now();
             try {
                 // If data is a string (double-encoded JSON), parse it
                 const parsed = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+                
                 const candleData = Array.isArray(parsed.data) ? parsed.data[0] : (parsed.data || parsed);
 
                 if (candleData && (candleData.open_time || candleData.t)) {
@@ -138,14 +152,18 @@ export class CoinDCXSocketService extends EventEmitter {
                         }
                     }
 
+                    const safe = (v: any) => {
+                        const n = Number(v);
+                        return isNaN(n) ? 0 : n;
+                    };
                     const formattedCandle = {
                         time: time,
                         pair: pair,
-                        open: parseFloat(candleData.open || candleData.o),
-                        high: parseFloat(candleData.high || candleData.h),
-                        low: parseFloat(candleData.low || candleData.l),
-                        close: parseFloat(candleData.close || candleData.c),
-                        volume: parseFloat(candleData.volume || candleData.v)
+                        open: safe(candleData.open || candleData.o),
+                        high: safe(candleData.high || candleData.h),
+                        low: safe(candleData.low || candleData.l),
+                        close: safe(candleData.close || candleData.c),
+                        volume: safe(candleData.volume || candleData.v)
                     };
                     this.emit('candlestick', formattedCandle);
                 } else {
