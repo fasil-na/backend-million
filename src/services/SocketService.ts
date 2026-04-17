@@ -12,6 +12,7 @@ import { CoinDCXApiService } from './CoinDCXApiService.js';
 import { TradeHistoryService } from './TradeHistoryService.js';
 import { OpeningBreakoutStrategy } from '../strategies/OpeningBreakoutStrategy.js';
 import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
+import { PriceStore } from './PriceStore.js';
 
 export class SocketService {
     private static io: SocketIOServer;
@@ -75,10 +76,14 @@ if (settings.isLiveTrading) {
     }
     private static setupCoinDCXListeners() {
     coinDCXSocket.on('candlestick', async (data: Candle) => {
+       const price = data.close;
+
 
         // Single settings read for entire handler
         const settings = SettingsService.getSettings();
+        const pair = (data as any).pair || settings.pair;
 
+        PriceStore.update(pair, data.close);
         // Synchronize internal candle buffer on pair/resolution change
         if (this.lastPair !== settings.pair || this.lastResolution !== settings.timeInterval) {
             this.candles = [];
@@ -402,11 +407,12 @@ if (settings.isLiveTrading && !this.isPlacingOrder) {
         this.lastKnownSLLow = latest.lastLow || latest.entryPrice;
 
         // Record in trade history
+        const entryPrice = PriceStore.get(pair) || latest.entryPrice;
         await TradeHistoryService.saveTrade({
             ...latest,
             pair,
             direction: latest.direction,
-            entryPrice: latest.entryPrice,
+            entryPrice: entryPrice,
             status: 'open',
             type: 'auto',
             entryTime: new Date().toISOString()

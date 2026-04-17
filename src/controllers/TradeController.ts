@@ -4,23 +4,48 @@ import { TradeService } from '../services/TradeService.js';
 import { SettingsService } from '../services/SettingsService.js';
 import { TradeHistoryService } from '../services/TradeHistoryService.js';
 import { calculateATR } from '../strategies/StrategyUtils.js';
+import { PriceStore } from '../services/PriceStore.js';
 
 export class TradeController {
     static async execute(req: Request, res: Response) {
-        try {
+        try 
+{
             const apiKey = process.env.COINDCX_API_KEY;
             const apiSecret = process.env.COINDCX_API_SECRET;
-            const { side, pair, price, capital = 100 } = req.body;
 
-            console.log(price,'price------')
-
-            if (capital <= 0) {
-                return res.status(400).json({ error: 'Insufficient capital (Bankruptcy)' });
+               if (!apiKey || !apiSecret) {
+                return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
             }
+            const { side, pair, price } = req.body;
+if (!side || !['buy', 'sell'].includes(side.toLowerCase())) {
+    return res.status(400).json({ error: 'Invalid side' });
+}
+const balances = await TradeService.getBalances();
+// Find USDT balance (or your margin currency)
+const usdtBalance = balances.find(
+  (b: any) => b.currency === 'USDT' || b.currency_short_name === 'USDT'
+);
+
+const availableBalance = Number(usdtBalance?.balance || 0);
+if (availableBalance <= 0) {
+    return res.status(400).json({ error: 'Insufficient balance in account' });
+}
 
             const settings = SettingsService.getSettings();
+
+
+ if (!settings.isLiveTrading) {
+                return res.status(400).json({ error: 'Live trading is disabled. Manual trades can only be executed in live mode.' });
+            }
+
+
             const leverage = settings.leverage || 1;
             const activePair = pair || settings.pair;
+            const entryPrice = PriceStore.get(activePair) || 0;
+
+            if (entryPrice <= 0) {
+                return res.status(400).json({ error: 'Could not determine entry price. Please wait for market data or provide a manual price.' });
+            }
 
             // Fetch recent candles for ATR-based SL calculation
             const now = Math.floor(Date.now() / 1000);
@@ -33,33 +58,27 @@ export class TradeController {
 
             let calculatedSL = 0;
             if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
-                console.log(candleRes.data.length,'candleRes.data,------')
                 let atr = calculateATR(candleRes.data, 14);
-                const entryPrice = parseFloat(price || "0");
-                
                 // Fallback: If ATR is 0 or too small, use 1% of entry price as a minimum buffer
                 if (atr === 0 || atr < (entryPrice * 0.001)) {
-                    console.log(`[TradeController] ⚠️ ATR calculation returned ${atr}, using fallback 1% SL.`);
                     atr = entryPrice * 0.01;
                 }
-                
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
-                console.log(`[TradeController] 📊 SL Calculated: ${calculatedSL} (Entry: ${entryPrice}, ATR: ${atr}, Side: ${side})`);
             } else {
-                console.log(`[TradeController] ⚠️ Failed to fetch candles for SL calculation, using fallback 1% SL.`);
-                const entryPrice = parseFloat(price || "0");
                 const fallbackAtr = entryPrice * 0.01;
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - fallbackAtr : entryPrice + fallbackAtr;
             }
 
-            const bankBalance = settings.bankBalance || 0;
-            const effectiveCapital = settings.isLiveTrading ? bankBalance : capital;
-            if(effectiveCapital <= 0){
+
+          
+            const bankBalance = availableBalance || 0;
+            const effectiveCapital = settings.isLiveTrading ? bankBalance : 0;
+            if (effectiveCapital <= 0) {
                 return res.status(400).json({ error: 'Insufficient capital (Bankruptcy)' });
             }
 
-            const rawPair = pair || settings.pair;
-            const parsedPrice = parseFloat(price || "1");
+            const rawPair = activePair;
+            const parsedPrice = entryPrice;
             const staticData = TradeService.STATIC_INSTRUMENTS[rawPair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
             const minNotional = staticData.minNotional || 6;
             const step = staticData.qtyStep;
@@ -67,30 +86,29 @@ export class TradeController {
             // Calculate quantity purely based on minimum notional requirement (e.g. $6), safely rounded up to the exchange's step size.
             const quantityNum = Math.ceil((minNotional / parsedPrice) / step) * step;
             const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side);
+         
+
+              // ======================-------------========================-------------
+         
+
             
-            if (!settings.isLiveTrading) {
-                return res.status(400).json({ error: 'Live trading is disabled. Manual trades can only be executed in live mode.' });
-            }
-
-            if (!apiKey || !apiSecret) {
-                return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
-            }
-
-            const result = await TradeService.executeFutureOrder({
-                direction: side,
+const result = await executeWithRetry(() =>
+     TradeService.executeFutureOrder({
+                direction: side.toLowerCase(),
                 pair: formattedParams.pair,
-                entryPrice: Number(price),
+                entryPrice: entryPrice,
                 units: formattedParams.qty,
                 stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
                 leverage: formattedParams.maxLeverage
-            });
+            })
+);
 
             // Record in trade history
             await TradeHistoryService.saveTrade({
                 entryTime: new Date().toISOString(),
                 direction: side,
                 pair: formattedParams.pair,
-                entryPrice: Number(price),
+                entryPrice: entryPrice,
                 units: formattedParams.qty,
                 sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
                 status: 'open',
@@ -120,4 +138,19 @@ export class TradeController {
             res.status(500).json({ error: error.message });
         }
     }
+    
+}
+async function executeWithRetry(fn:any, retries = 3) {
+    let lastError;
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (err) {
+            lastError = err;
+            console.warn(`Retry ${i + 1} failed`);
+        }
+    }
+
+    throw lastError;
 }

@@ -36,7 +36,8 @@ export class TradeService {
 
     public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
         'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1 },
-        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 }
+        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 },
+        'SUSHIUSDT':{ maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 },
     };
 
     static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy') {
@@ -100,7 +101,7 @@ console.log(trade,'trade------++++((((((')
             margin_currency_short_name: marginName
         };
 
-        if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
+        // if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
         if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
 
         const body = {
@@ -112,7 +113,6 @@ console.log(trade,'trade------++++((((((')
 
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
-
         try {
             console.log(`[TradeService] 🚀 Executing ${trade.direction?.toUpperCase()} order for ${pair}...`);
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/create`, body, {
@@ -235,10 +235,8 @@ console.log(trade,'trade------++++((((((')
 
     static async syncLiveBalance(currency: string = 'USDT') {
         const balances = await this.getBalances();
-        console.log(balances,'balances$$$$$$$$$$$')
         if (Array.isArray(balances)) {
             const marginBalance = balances.find((b: any) => b.currency_short_name === currency);
-            console.log(marginBalance,'marginBalance-----******')
             if (marginBalance && marginBalance.balance !== undefined) {
                 // If locked balance exists, we may want to include it or just use available. Usually 'balance' represents the usable margin or total margin.
                 const totalBalance = Number(marginBalance.balance);

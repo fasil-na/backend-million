@@ -124,8 +124,23 @@ export class CoinDCXSocketService extends EventEmitter {
                     let time = candleData.open_time || candleData.t;
                     if (time < 10000000000) time *= 1000; // Convert seconds to milliseconds
 
+                    // Extract pair from channel if possible (e.g. "B-BTC_USDT_1m-futures")
+                    let pair = candleData.pair || candleData.s || parsed.channel || response.channel;
+                    if (pair && pair.includes('_')) {
+                        // strip resolution if present in channel name
+                        pair = pair.split('_').slice(0, 2).join('_');
+                        // if it had a resolution suffix like "1m-futures", cleaning might be more complex
+                        if (pair.includes('-futures')) pair = pair.replace('-futures', '');
+                        // Actually, if it's from channel "B-BTC_USDT_1m-futures", splitting by "_" gives ["B-BTC", "USDT", "1m-futures"]
+                        const parts = (parsed.channel || response.channel || "").split('_');
+                        if (parts.length >= 2) {
+                            pair = `${parts[0]}_${parts[1]}`.replace('-futures', '');
+                        }
+                    }
+
                     const formattedCandle = {
                         time: time,
+                        pair: pair,
                         open: parseFloat(candleData.open || candleData.o),
                         high: parseFloat(candleData.high || candleData.h),
                         low: parseFloat(candleData.low || candleData.l),

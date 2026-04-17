@@ -6,12 +6,32 @@ import settingsRoutes from './settingsRoutes.js';
 
 const router = Router();
 
+// --- Route Groups ---
 router.use('/trade', tradeRoutes);
-router.use('/', marketRoutes);
+router.use('/market', marketRoutes);
 router.use('/trade-history', tradeHistoryRoutes);
 router.use('/settings', settingsRoutes);
 
-// Health check
-router.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+// --- Health Check (Enhanced) ---
+router.get('/health', async (req, res) => {
+  try {
+    // Example checks (you will plug real ones)
+    const health = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      // socket: socketService.isConnected(),
+      // exchange: await checkExchangeConnection(),
+    };
+
+    res.json(health);
+  } catch (error:any) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+    });
+  }
+});
 
 export default router;
