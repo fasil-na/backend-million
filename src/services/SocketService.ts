@@ -9,7 +9,7 @@ import type { Candle, Position, Trade } from '../types/index.js';
 import { SettingsService } from './SettingsService.js';
 import { TradeService } from './TradeService.js';
 import { CoinDCXApiService } from './CoinDCXApiService.js';
-import { PaperTradeService } from './PaperTradeService.js';
+import { TradeHistoryService } from './TradeHistoryService.js';
 import { OpeningBreakoutStrategy } from '../strategies/OpeningBreakoutStrategy.js';
 import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 
@@ -21,12 +21,10 @@ export class SocketService {
     private static lastKnownSLHigh: number | null = null;
     private static lastKnownSLLow: number | null = null;
     private static currentPosition: Position | null = null;
-    private static currentPaperTrade: Trade | null = null;
     private static candleIndexMap = new Map<number, number>();
     private static isStrategyRunning = false;
     private static isPlacingOrder = false;
     private static isClosingPosition = false;
-    private static isClosingPaperTrade = false;
 
 
     static init(server: HTTPServer) {
@@ -176,31 +174,6 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             this.lastKnownSLHigh = null;
             this.lastKnownSLLow = null;
 
-            // Record trade exit details if there was an active trade session
-            try {
-                const activeTrade = await PaperTradeService.getActiveTrade();
-                if (activeTrade && activeTrade.status === 'open') {
-                    // Use last known close price as exit price estimate if closed externally
-                    const lastCandle = this.candles[this.candles.length - 1];
-                    const exitPrice = lastCandle ? lastCandle.close : activeTrade.entryPrice;
-                    
-                    activeTrade.status = 'closed';
-                    activeTrade.exitPrice = exitPrice;
-                    activeTrade.exitTime = new Date().toISOString();
-                    activeTrade.exitReason = 'Exchange Position Closed';
-
-                    // Calculate PnL accurately using utility
-                    const { profit, fee } = calculateTradeProfit(activeTrade, exitPrice, 0.0005);
-                    
-                    activeTrade.profit = profit;
-                    activeTrade.fee = fee;
-                    await PaperTradeService.saveTrade(activeTrade);
-                    console.log(`[Position] Recorded exit for ${pair} at ${exitPrice}. Profit: ${profit} (Fee: ${fee})`);
-                }
-            } catch (err) {
-                console.error('[Position] Failed to record trade exit:', err);
-            }
-
             // Sync balance if live trading — but close the trade regardless of result
             if (settings.isLiveTrading) {
                 const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
@@ -208,7 +181,30 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                     await TradeService.syncLiveBalance(marginCurrency);
                 } catch (err) {
                     console.error('[Position] Balance sync failed:', err);
-                    // Don't block — still mark trade as closed below
+                }
+
+                // Record trade exit details 
+                try {
+                    const activeTrade = await TradeHistoryService.getActiveTrade();
+                    if (activeTrade && activeTrade.status === 'open') {
+                        const lastCandle = this.candles[this.candles.length - 1];
+                        const exitPrice = lastCandle ? lastCandle.close : activeTrade.entryPrice;
+                        
+                        activeTrade.status = 'closed';
+                        activeTrade.exitPrice = exitPrice;
+                        activeTrade.exitTime = new Date().toISOString();
+                        activeTrade.exitReason = 'Exchange Position Closed';
+
+                        const { profit, fee } = calculateTradeProfit(activeTrade, exitPrice, 0.0005);
+                        activeTrade.profit = profit;
+                        activeTrade.fee = fee;
+                        
+                        await TradeHistoryService.saveTrade(activeTrade);
+                        console.log(`[Position] Recorded exit for ${pair} at ${exitPrice}. Profit: ${profit}`);
+                        this.io.emit('trade-history-update', activeTrade);
+                    }
+                } catch (err) {
+                    console.error('[Position] Failed to record trade exit:', err);
                 }
             }
 
@@ -301,68 +297,49 @@ if (settings.isLiveTrading && !this.currentPosition) {
                             console.error('[Autonomous] API failure — skipping SL update');
                             return;
                         }
-                                      if (pos && pos.id && pos.active_pos !== 0) {
-                        const activeLiveTrade = await PaperTradeService.getActiveTrade();
-                        if (activeLiveTrade) {
-                            const oldSL = activeLiveTrade.sl || Number(pos.stop_loss_trigger);
-                            OpeningBreakoutStrategy.updateTrailingSL(activeLiveTrade, lastCandle);
-                            
-                            const newSL = activeLiveTrade.sl || oldSL;
-                            
-                            // If SL moved significantly, update exchange
-                            if (Math.abs(newSL - oldSL) > (oldSL * 0.001)) {
-                                console.log(`[Autonomous] Trailing SL moved to ${newSL}. Updating exchange...`);
-                                await TradeService.updatePositionTPSL({
-                                    positionId: pos.id,
-                                    stopLossPrice: newSL
-                                });
-                                // Keep memory state in sync
-                                this.lastKnownSLHigh = activeLiveTrade.lastHigh || null;
-                                this.lastKnownSLLow = activeLiveTrade.lastLow || null;
-                                
-                                // Save the updated trade (including trailingCount)
-                                await PaperTradeService.saveTrade(activeLiveTrade);
-                                this.io.emit('paper-trade-update', activeLiveTrade);
-                            }
+
+                        pos = Array.isArray(positions) 
+                            ? positions.find((p: any) => p.pair === settings.pair && p.active_pos !== 0)
+                            : null;
+
+                        if (!pos) {
+                            // pos missing or active_pos = 0 — exchange says flat
+                            console.warn('[Autonomous] State mismatch — exchange is flat but activeTradeStatus is open. Resetting...');
+                            this.currentPosition = null;
+                            this.lastKnownSLHigh = null;
+                            this.lastKnownSLLow = null;
+                            await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+                            this.io.emit('settings-update', SettingsService.getSettings());
+                            return;
                         }
-                    
-                    } else {
-                        // pos missing or active_pos = 0 — exchange says flat
-                        console.warn('[Autonomous] State mismatch — exchange is flat but activeTradeStatus is open. Resetting...');
-                        this.currentPosition = null;
-                        this.lastKnownSLHigh = null;
-                        this.lastKnownSLLow = null;
-                        await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                        this.io.emit('settings-update', SettingsService.getSettings());
+                        this.currentPosition = pos;
                     }
-                } 
-            }catch (err: any) {
+
+                    // Handle Trailing SL for history
+                    const activeTrade = await TradeHistoryService.getActiveTrade();
+                    if (activeTrade && activeTrade.status === 'open' && pos) {
+                        const oldSL = activeTrade.sl || Number(pos.stop_loss_price || pos.stop_loss_trigger);
+                        OpeningBreakoutStrategy.updateTrailingSL(activeTrade, lastCandle);
+                        
+                        const newSL = activeTrade.sl || oldSL;
+                        if (Math.abs(newSL - oldSL) > (oldSL * 0.0001)) {
+                            console.log(`[Autonomous] Trailing SL moved from ${oldSL} to ${newSL}. Updating exchange...`);
+                            await TradeService.updatePositionTPSL({
+                                positionId: pos.id,
+                                stopLossPrice: newSL
+                            });
+                            this.lastKnownSLHigh = activeTrade.lastHigh || null;
+                            this.lastKnownSLLow = activeTrade.lastLow || null;
+                            await TradeHistoryService.saveTrade(activeTrade);
+                            this.io.emit('trade-history-update', activeTrade);
+                        }
+                    }
+                } catch (err: any) {
                     console.error('[Autonomous] Failed to update trailing SL:', err.message);
                 }
                 return; 
             }
-
-            // --- Paper trade trailing SL ---
-            if (settings.isPaperTrading) {
-                const activePaperTrade = this.currentPaperTrade 
-                    || await PaperTradeService.getActiveTrade();
-                    
-                if (activePaperTrade) {
-                    this.currentPaperTrade = activePaperTrade; // ensure cache is set
-                    OpeningBreakoutStrategy.updateTrailingSL(activePaperTrade, lastCandle);
-                    await PaperTradeService.saveTrade(activePaperTrade);
-                    this.io.emit('paper-trade-update', activePaperTrade);
-                } else {
-                    // paper trade missing — fix mismatch
-                    console.warn('[Autonomous] Paper trade mismatch — resetting state...');
-                    this.currentPaperTrade = null;
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-                }
-                return; // always return
-            }
-
-            return; // safety return — should never reach here
+            return; 
         }
 
         // ═══════════════════════════════════════════════
@@ -412,14 +389,6 @@ const livePos = Array.isArray(positions)
             console.log('🚀 NEW STRATEGY SIGNAL:', latest);
             this.io.emit('strategy-signal', { pair, trade: latest });
 
-            // --- Paper trade entry ---
-            if (settings.isPaperTrading) {
-                const newPaperTrade = { pair, ...latest, type: 'auto' };
-                await PaperTradeService.saveTrade(newPaperTrade);
-                this.currentPaperTrade = newPaperTrade; // cache it
-                console.log('📄 New Paper Trade Opened:', newPaperTrade);
-            }
-
 if (settings.isLiveTrading && !this.isPlacingOrder) {
     this.isPlacingOrder = true;
 
@@ -431,6 +400,17 @@ if (settings.isLiveTrading && !this.isPlacingOrder) {
 
         this.lastKnownSLHigh = latest.lastHigh || latest.entryPrice;
         this.lastKnownSLLow = latest.lastLow || latest.entryPrice;
+
+        // Record in trade history
+        await TradeHistoryService.saveTrade({
+            ...latest,
+            pair,
+            direction: latest.direction,
+            entryPrice: latest.entryPrice,
+            status: 'open',
+            type: 'auto',
+            entryTime: new Date().toISOString()
+        });
 
     } catch (err) {
         console.error('[ORDER] Placement failed:', err);
@@ -455,61 +435,6 @@ if (settings.isLiveTrading && !this.isPlacingOrder) {
     try {
         const settings = SettingsService.getSettings();
         const currentPrice = tick.close;
-if (settings.isPaperTrading) {
-    const activePaperTrade =
-        this.currentPaperTrade || await PaperTradeService.getActiveTrade();
-
-    if (!activePaperTrade || activePaperTrade.status !== 'open') return;
-    if (!activePaperTrade.sl) return;
-
-    if (this.isClosingPaperTrade) return;
-    this.isClosingPaperTrade = true;
-
-    try {
-        let exited = false;
-
-        const isBuy = activePaperTrade.direction === 'buy';
-
-        if (isBuy && currentPrice <= activePaperTrade.sl) exited = true;
-        if (!isBuy && currentPrice >= activePaperTrade.sl) exited = true;
-
-        if (!exited) return;
-
-        console.warn('[PAPER SL] Hit — closing trade');
-
-        activePaperTrade.exitPrice = activePaperTrade.sl;
-        activePaperTrade.status = 'closed';
-        activePaperTrade.exitTime = new Date().toISOString();
-        activePaperTrade.exitReason = 'SL Hit (Real-time Tick)';
-
-        const { profit, fee } = calculateTradeProfit(
-            activePaperTrade,
-            activePaperTrade.exitPrice,
-            0.0005
-        );
-
-        activePaperTrade.profit = profit;
-        activePaperTrade.fee = fee;
-
-        await PaperTradeService.saveTrade(activePaperTrade);
-
-        this.currentPaperTrade = null;
-
-        this.io.emit('paper-trade-update', activePaperTrade);
-
-const latestSettings = SettingsService.getSettings();
-const newBankBalance = (latestSettings.bankBalance || 0) + profit;
-
-        await SettingsService.saveSettings({ bankBalance: newBankBalance });
-
-        this.io.emit('settings-update', SettingsService.getSettings());
-
-    } catch (err) {
-        console.error('[PAPER SL ERROR]', err);
-    } finally {
-        this.isClosingPaperTrade = false;
-    }
-}
         // ================================
         // 🔴 LIVE TRADING SL (CRITICAL)
         // ================================

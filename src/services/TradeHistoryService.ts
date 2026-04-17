@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import type { Trade } from '../types/index.js';
 import { TradeModel } from '../models/Trade.js';
 
-export class PaperTradeService {
+export class TradeHistoryService {
     static async getTrades(): Promise<Trade[]> {
         if (mongoose.connection.readyState !== 1) {
             console.error("MongoDB not connected. Cannot get trades.");
@@ -11,34 +11,38 @@ export class PaperTradeService {
         try {
             return await TradeModel.find().sort({ entryTime: -1 }).lean();
         } catch (e) {
-            console.error("Error reading paper trades from MongoDB:", e);
+            console.error("Error reading trades from MongoDB:", e);
             return [];
         }
     }
 
-    static async saveTrade(trade: Trade) {
+    static async saveTrade(trade: Partial<Trade>) {
         if (mongoose.connection.readyState !== 1) {
-            console.error("❌ MongoDB not connected. Cannot save paper trade.");
+            console.error("❌ MongoDB not connected. Cannot save trade.");
             throw new Error("Database connection error");
         }
         try {
             // Strip _id and __v to prevent Mongoose from throwing immutable field errors
             const { _id, __v, ...updateData } = trade as any;
 
+            if (!trade.entryTime) {
+              updateData.entryTime = new Date().toISOString();
+            }
+
             const result = await TradeModel.findOneAndUpdate(
-                { entryTime: trade.entryTime },
+                { entryTime: updateData.entryTime },
                 updateData,
                 { upsert: true, new: true }
             );
-            console.log(`✅ Paper trade saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
+            console.log(`✅ Trade history saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
             return result;
         } catch (e: any) {
-            console.error("❌ Error saving paper trade to MongoDB:", e.message);
+            console.error("❌ Error saving trade to MongoDB:", e.message);
             throw e;
         }
     }
 
-    static async updateTrade(trade: Trade) {
+    static async updateTrade(trade: Partial<Trade>) {
         await this.saveTrade(trade);
     }
 
@@ -57,7 +61,7 @@ export class PaperTradeService {
         try {
             await TradeModel.deleteOne({ entryTime });
         } catch (e) {
-            console.error("Error deleting paper trade from MongoDB:", e);
+            console.error("Error deleting trade from MongoDB:", e);
         }
     }
 
@@ -65,7 +69,7 @@ export class PaperTradeService {
         try {
             await TradeModel.deleteMany({});
         } catch (e) {
-            console.error("Error clearing paper trades from MongoDB:", e);
+            console.error("Error clearing trades from MongoDB:", e);
         }
     }
 }

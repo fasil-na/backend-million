@@ -2,7 +2,6 @@ import { SettingsModel } from '../models/Settings.js';
 
 export interface AppSettings {
     isLiveMonitoring: boolean;
-    isPaperTrading: boolean;
     isLiveTrading: boolean;
     leverage: number;
     timeInterval: string;
@@ -15,7 +14,6 @@ export interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = {
     isLiveMonitoring: false,
-    isPaperTrading: true,
     isLiveTrading: false,
     leverage: 1,
     timeInterval: '1',

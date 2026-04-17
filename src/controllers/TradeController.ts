@@ -2,7 +2,7 @@ import { type Request, type Response } from 'express';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import { TradeService } from '../services/TradeService.js';
 import { SettingsService } from '../services/SettingsService.js';
-import { PaperTradeService } from '../services/PaperTradeService.js';
+import { TradeHistoryService } from '../services/TradeHistoryService.js';
 import { calculateATR } from '../strategies/StrategyUtils.js';
 
 export class TradeController {
@@ -66,14 +66,27 @@ export class TradeController {
 
             // Calculate quantity purely based on minimum notional requirement (e.g. $6), safely rounded up to the exchange's step size.
             const quantityNum = Math.ceil((minNotional / parsedPrice) / step) * step;
-console.log(quantityNum,'quantityNum======')
             const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side);
-            console.log(formattedParams,'formattedParams----')
-            let result: any = { message: 'Trade recorded in paper history (Real execution disabled)' };
+            
+            if (!settings.isLiveTrading) {
+                return res.status(400).json({ error: 'Live trading is disabled. Manual trades can only be executed in live mode.' });
+            }
 
-            console.log(`[TradeController] 📝 Recording manual paper trade for ${rawPair}...`);
-            // Record in paper trade history
-            await PaperTradeService.saveTrade({
+            if (!apiKey || !apiSecret) {
+                return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
+            }
+
+            const result = await TradeService.executeFutureOrder({
+                direction: side,
+                pair: formattedParams.pair,
+                entryPrice: Number(price),
+                units: formattedParams.qty,
+                stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                leverage: formattedParams.maxLeverage
+            });
+
+            // Record in trade history
+            await TradeHistoryService.saveTrade({
                 entryTime: new Date().toISOString(),
                 direction: side,
                 pair: formattedParams.pair,
@@ -84,20 +97,6 @@ console.log(quantityNum,'quantityNum======')
                 profit: 0,
                 type: 'manual'
             });
-
-            if (settings.isLiveTrading) {
-                if (!apiKey || !apiSecret) {
-                    return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
-                }
-                result = await TradeService.executeFutureOrder({
-                    direction: side,
-                    pair: formattedParams.pair,
-                    entryPrice: Number(price),
-                    units: formattedParams.qty,
-                    stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
-                    leverage: formattedParams.maxLeverage
-                });
-            }
 
             return res.json(result);
         } catch (error: any) {
