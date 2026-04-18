@@ -77,18 +77,25 @@ if (settings.isLiveTrading) {
     }
     private static setupCoinDCXListeners() {
     coinDCXSocket.on('candlestick', async (data: Candle) => {
-                // Emit to frontend on every tick
+        const settings = SettingsService.getSettings();
+        const incomingPair = (data as any).pair || settings.pair;
+        
+        const cleanIncoming = incomingPair.replace('B-', '').replace('_', '').toUpperCase();
+        const cleanSettings = settings.pair.replace('B-', '').replace('_', '').toUpperCase();
+
+        if (cleanIncoming !== cleanSettings) {
+            return; // Ignore ghost candles from older subscriptions
+        }
+
+        // Emit to frontend on every tick
         this.io.emit('candlestick', data);
         
-       const price = data.close;
+        const price = data.close;
 
-        // Single settings read for entire handler
-        const settings = SettingsService.getSettings();
         this.io.emit('price-change', { m: settings.pair, p: data.close });
 
-        const pair = (data as any).pair || settings.pair;
-
-        PriceStore.update(pair, data.close);
+        PriceStore.update(incomingPair, data.close);
+        
         // Synchronize internal candle buffer on pair/resolution change
         if (this.lastPair !== settings.pair || this.lastResolution !== settings.timeInterval) {
             this.candles = [];
@@ -108,13 +115,14 @@ if (settings.isLiveTrading) {
         } else {
             // New candle arrived — previous one is now closed
             const isNewCandleTrigger = this.candles.length > 0;
-
+console.log(isNewCandleTrigger,'isNewCandleTrigger--')
             // Register in map before pushing
             this.candleIndexMap.set(data.time, this.candles.length);
             this.candles.push(data);
 
-            // Keep buffer capped at 1000
-            if (this.candles.length > 1000) {
+            // Keep buffer capped at 3000 (roughly 50 hours of 1-min data) to ensure 
+            // exact symmetry with the backtester's 48-hour context window.
+            if (this.candles.length > 3000) {
                 const removed = this.candles.shift();
                 if (removed) {
                     this.candleIndexMap.delete(removed.time);
@@ -128,13 +136,15 @@ if (settings.isLiveTrading) {
             if (isNewCandleTrigger && settings.isLiveMonitoring) {
                 // Heartbeat status log
                 const localState = settings.activeTradeStatus.toUpperCase();
+                console.log(localState,'localState-----')
                 const exchangeState = this.currentPosition ? 'ACTIVE' : 'NONE';
-                console.log(`[Status] ${pair}: ${data.close} | Local: ${localState} | Exchange: ${exchangeState} | Flag: closing=${this.isClosingPosition}`);
+                console.log(`[Status] ${incomingPair}: ${data.close} | Local: ${localState} | Exchange: ${exchangeState} | Flag: closing=${this.isClosingPosition}`);
 
                 // 1. ALWAYS manage trailing SL every 1 minute
                 console.log(`[Lifecycle] 🕯️ 1m Candle Closed. Syncing Trailing SL...`);
+                if(localState==='OPEN'){
                 this.manageTrailingSL().catch(err => console.error('[Trailing] ❌ Sync Error:', err.message));
-
+                }
                 // 2. ONLY check for strategy signals on the user's selected interval
                 const intervalMinutes = Number(settings.timeInterval);
                 const currentTime = new Date(data.time);
@@ -430,16 +440,30 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 }
             }
 
+            // For backtest (simulation), we use `initialCapital` directly.
+            let liveCapital = initialCapital;
+
+            // Enforce Minimum Risk Sizing in Live Auto Trading:
+            // Force the strategy to structure its trade size using EXACTLY the bare minimum capital 
+            // required to hit the exchange's limits ($6.00). Setting to 110% of minimum for safety buffer.
+            if (settings.isLiveTrading) {
+                const cleanS = (pair || '').replace('B-', '').toLowerCase();
+                const staticData = TradeService.STATIC_INSTRUMENTS[cleanS] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || { minNotional: 6 };
+                const safeNotional = (staticData.minNotional || 6) * 1.10; 
+                liveCapital = safeNotional / leverage;
+                console.log(`[Strategy] 🛡️ Minimum Risk Sizing: Scaling position down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional requirement at ${leverage}x leverage.`);
+            }
+
             // 4. Run Strategy Check
             console.log(`[Strategy] 🔍 Scanning ${this.candles.length} candles for '${selectedStrategyId}' signal...`);
             const result = strategy.run(this.candles, {
                 type: 'live',
-                capital: initialCapital,
+                capital: liveCapital,
                 leverage: leverage,
                 atrMultiplierSL: 1,
                 simulationStartUnix: from
             });
-
+console.log(result,'result---')
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 console.log(`[Strategy] 🎯 SIGNAL DETECTED: ${latest.direction} for ${pair}`);

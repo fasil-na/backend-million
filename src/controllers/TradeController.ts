@@ -83,8 +83,16 @@ if (availableBalance <= 0) {
             const minNotional = staticData.minNotional || 6;
             const step = staticData.qtyStep;
 
-            // Calculate quantity purely based on minimum notional requirement (e.g. $6), safely rounded up to the exchange's step size.
-            const quantityNum = Math.ceil((minNotional / parsedPrice) / step) * step;
+            // Calculate quantity based on real balance (bankBalance) and leverage (notional value).
+            // Ensure we at least meet the minimum notional requirement bounded by step size.
+            const balanceQty = (bankBalance * leverage) / parsedPrice;
+            let quantityNum = Math.floor(balanceQty / step) * step;
+            const minQty = Math.ceil((minNotional / parsedPrice) / step) * step;
+            
+            if (quantityNum < minQty) {
+                quantityNum = minQty;
+            }
+
             const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side);
          
 

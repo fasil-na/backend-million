@@ -74,6 +74,13 @@ export class StrategyController {
                             
                             if ('trades' in result) {
                                 allTrades.push(...result.trades);
+                                
+                                // Show currently open simulated trades in the UI so users 
+                                // don't think recent signals were missed if they haven't closed yet.
+                                // if (result.activeTrade) {
+                                //     allTrades.push(result.activeTrade);
+                                // }
+                                
                                 currentCapital = result.finalBalance;
                                 if (currentCapital <= 0) break;
                             }

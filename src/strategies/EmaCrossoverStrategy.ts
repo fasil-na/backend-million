@@ -20,7 +20,7 @@ export class EmaCrossoverStrategy implements Strategy {
             return this.checkSignal(candles, params);
         }
 
-        if (candles.length < 50) return { trades: [], finalBalance: capital };
+        if (candles.length < 20) return { trades: [], finalBalance: capital };
 
         const {
             feeRate = 0.0005,
@@ -34,7 +34,7 @@ export class EmaCrossoverStrategy implements Strategy {
         let currentTrade: Trade | null = null;
         let subIdx = 0;
 
-        for (let i = 50; i < candles.length; i++) {
+        for (let i =20; i < candles.length; i++) {
             const c = candles[i];
             if (currentBalance <= 0) {
                 console.log("BANKRUPTCY: Balance hit 0, stopping strategy.");
@@ -98,7 +98,7 @@ export class EmaCrossoverStrategy implements Strategy {
                 // Exit signal on moving average crossback
                 if (currentTrade) {
                     const fastEma = this.calculateEMA(closes, 9, i);
-                    const slowEma = this.calculateEMA(closes, 21, i);
+                    const slowEma = this.calculateEMA(closes, 10, i);
                     if (trade.direction === 'buy' && fastEma < slowEma) {
                         trade.exitPrice = c.close;
                         trade.exitReason = 'Signal Reversal';
@@ -158,10 +158,10 @@ export class EmaCrossoverStrategy implements Strategy {
         const closes = candles.map(candle => candle.close);
         
         const fastEmaPrev = this.calculateEMA(closes, 9, i - 1);
-        const slowEmaPrev = this.calculateEMA(closes, 21, i - 1);
+        const slowEmaPrev = this.calculateEMA(closes, 10, i - 1);
         
         const fastEmaCurr = this.calculateEMA(closes, 9, i);
-        const slowEmaCurr = this.calculateEMA(closes, 21, i);
+        const slowEmaCurr = this.calculateEMA(closes, 10, i);
         
         if (fastEmaPrev <= slowEmaPrev && fastEmaCurr > slowEmaCurr) return 'buy';
         if (fastEmaPrev >= slowEmaPrev && fastEmaCurr < slowEmaCurr) return 'sell';
@@ -197,8 +197,11 @@ export class EmaCrossoverStrategy implements Strategy {
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
         if (candles.length < 21) return { matched: false };
+        // Evaluate signals on the most recently *closed* candle (length - 2),
+        // because length - 1 is the brand new forming candle when this is triggered.
+        const i = candles.length - 2;
+        if (i < 0) return { matched: false };
         
-        const i = candles.length - 1;
         const c = candles[i];
         if (!c) return { matched: false };
 
@@ -213,7 +216,9 @@ export class EmaCrossoverStrategy implements Strategy {
 
     private calculateEMA(data: number[], period: number, index: number): number {
         const k = 2 / (period + 1);
-        const startIdx = Math.max(0, index - period * 2);
+        // Use exactly 500 candles for EMA "warm-up" in both backtesting and live modes
+        // to guarantee identically precise calculations regardless of total history loaded.
+        const startIdx = Math.max(0, index - 500);
         let ema = data[startIdx] || 0;
         for (let i = startIdx + 1; i <= index; i++) {
             const val = data[i] || 0;

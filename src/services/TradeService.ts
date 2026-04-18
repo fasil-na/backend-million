@@ -35,19 +35,29 @@ export class TradeService {
     }
 
     public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
-        'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1 },
-        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 },
-        'SUSHIUSDT':{ maxLeverage: 10, qtyStep: 1, priceStep: 0.0001 },
+        'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1,minNotional:6  },
+        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001,minNotional:6 },
+        'SUSHIUSDT':{ maxLeverage: 10, qtyStep: 1, priceStep: 0.0001,minNotional:6 },
     };
 
-    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy') {
+    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0) {
         const pair = formatPair(rawPair);
         const staticData = this.STATIC_INSTRUMENTS[pair] || this.STATIC_INSTRUMENTS['B-BTC_USDT'];
         
         const maxLeverage = Math.min(leverage, staticData.maxLeverage);
         
         const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-        const qty = Number(Number(rawQty).toFixed(qtyPrecision));
+        let qty = Number(Number(rawQty).toFixed(qtyPrecision));
+
+        // Enforce minimum quantity based on minimum notional requirement
+        if (entryPrice > 0) {
+             const minNotional = staticData.minNotional || 6;
+             const step = staticData.qtyStep;
+             const minQty = Math.ceil((minNotional / entryPrice) / step) * step;
+             if (qty < minQty) {
+                 qty = minQty;
+             }
+        }
 
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
         const tpPrice = customTp > 0 ? Number(Number(customTp).toFixed(pricePrecision)) : 0;
@@ -55,13 +65,13 @@ export class TradeService {
 
         const marginName = pair.includes('USDT') ? 'USDT' : 'INR';
 
-        return { pair, qty, maxLeverage, tpPrice, slPrice, marginName };
+        return { pair, qty: Number(qty.toFixed(qtyPrecision)), maxLeverage, tpPrice, slPrice, marginName };
     }
 
     // final excecution of trade
     static async executeFutureOrder(trade: Partial<Trade> & { pair?: string, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
         const { apiKey, apiSecret } = this.credentials;
-
+console.log(trade,'trade------')
         if (!apiKey || !apiSecret) {
             console.error("❌ CoinDCX API Key or Secret missing in .env. Skipping trade execution.");
             return;
@@ -70,23 +80,14 @@ export class TradeService {
         const settings = SettingsService.getSettings();
         const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
-//      const balances = await this.getBalances();
-// const wallet = balances.find((b: any) => b.currency === marginName);
-
-// if (wallet) {
-//     await SettingsService.saveSettings({
-//         liveBalance: Number(wallet.balance)
-//     });
-// }
-console.log(trade,'trade------++++((((((')
-
         const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
             trade.pair || settings.pair,
             Number(trade.units),
             trade.leverage || settings.leverage,
             Number(trade.take_profit_price || trade.tp || 0),
             Number(trade.stop_loss_price || trade.sl || 0),
-            trade.direction || 'buy'
+            trade.direction || 'buy',
+            trade.entryPrice || 0
         );
 
         const baseOrder: any = {

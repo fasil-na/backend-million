@@ -235,8 +235,11 @@ console.log(type,'type-----')
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
         if (candles.length < 10) return { matched: false };
+        // Evaluate signals on the most recently *closed* candle (length - 2),
+        // because length - 1 is the brand new forming candle when this is triggered.
+        const i = candles.length - 2;
+        if (i < 0) return { matched: false };
         
-        const i = candles.length - 1;
         const c = candles[i];
         if (!c) return { matched: false };
 
@@ -244,7 +247,7 @@ console.log(type,'type-----')
         let rangeLow: number | null = null;
         const time = dayjs(c.time).tz('Asia/Kolkata');
         const currentDay = time.format('YYYY-MM-DD');
-        const openingWindow = 0;
+        const openingWindow = 20; // 🛑 CRITICAL FIX: Synchronize with the identical 20-candle range window defined in backtester `run()`
 
         let dayCandleCount = 0;
         for (const candle of candles) {
@@ -271,7 +274,9 @@ console.log(type,'type-----')
 
     private calculateEMA(data: number[], period: number, index: number): number {
         const k = 2 / (period + 1);
-        const startIdx = Math.max(0, index - period);
+        // Use exactly 500 candles for EMA "warm-up" in both backtesting and live modes
+        // to guarantee identically precise calculations regardless of total history loaded.
+        const startIdx = Math.max(0, index - 500);
         let ema = data[startIdx] || 0;
         for (let i = startIdx + 1; i <= index; i++) {
             const val = data[i] || 0;
