@@ -351,7 +351,13 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 OpeningBreakoutStrategy.updateTrailingSL(activeTrade, lastCandle);
 
                 const calculatedSL = activeTrade.sl || oldSL;
-                const newSL = Number(calculatedSL.toFixed(4)); // 🎯 Round to 0.0001 precision
+                
+                // 🎯 Dynamically round to the exact precision mandated by the exchange for this pair
+                const cleanPair = (pair || '').replace('B-', '').toLowerCase();
+                const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+                const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                
+                const newSL = Number(calculatedSL.toFixed(pricePrecision)); 
                 const change = Math.abs(newSL - oldSL);
                 const threshold = oldSL * 0.0001; 
 
