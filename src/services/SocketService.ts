@@ -463,6 +463,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             // 4. Run Strategy Check
             console.log(`[Strategy] 🔍 Scanning ${this.candles.length} candles for '${selectedStrategyId}' signal...`);
             const result = strategy.run(this.candles, {
+                pair: pair, // 🛑 CRITICAL FIX: Pass pair down so mathematical strategies know which numeric limits to obey!
                 type: 'live',
                 capital: liveCapital,
                 leverage: leverage,

@@ -4,6 +4,7 @@ import timezone from 'dayjs/plugin/timezone.js';
 import type { Candle, Trade } from '../types/index.js';
 import type { Strategy } from './index.js';
 import { calculateUnits, calculateTradeProfit } from './StrategyUtils.js';
+import { TradeService } from '../services/TradeService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -66,6 +67,11 @@ export class EmaCrossoverStrategy implements Strategy {
 
                     if (trailingSL) {
                         EmaCrossoverStrategy.updateTrailingSL(trade, sc);
+                        // 🎯 Round SL dynamically
+                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
+                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                        trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
                     }
 
                     if (trade.direction === 'buy') {
@@ -170,10 +176,16 @@ export class EmaCrossoverStrategy implements Strategy {
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL = 1.5, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
+        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = this.calculateATR(candles, 14, i);
-        const sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+        let sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+
+        // 🎯 Enforce Native Precision Rules on Entry Stop Loss
+        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
+        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        sl = Number(sl.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {
             capital: balance,
