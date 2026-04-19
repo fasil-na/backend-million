@@ -27,6 +27,7 @@ export class SocketService {
     private static isPlacingOrder = false;
     private static isClosingPosition = false;
     private static lastProcessedCandleTime: number | null = null;
+    private static lastSignalTime: number | null = null;
 
 
     static init(server: HTTPServer) {
@@ -330,30 +331,51 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 return;
             }
 
+            const activeTrade = await TradeHistoryService.getActiveTrade();
+            if (!activeTrade || activeTrade.status !== 'open') {
+                return;
+            }
+
+            // 🛡️ RECOVERY/PAPER BYPASS: If it's a simulated trade, don't check the exchange
+            if (activeTrade.type === 'paper' || activeTrade.type === 'recovery') {
+                // For paper trades, we just use the last candle to update SL
+                OpeningBreakoutStrategy.updateTrailingSL(activeTrade, lastCandle);
+                
+                const cleanPair = (pair || '').replace('B-', '').toLowerCase();
+                const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+                const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                
+                const oldSL = activeTrade.sl || 0;
+                const newSL = Number((activeTrade.sl || 0).toFixed(pricePrecision));
+
+                if (Math.abs(newSL - oldSL) > (oldSL * 0.0001)) {
+                    console.log(`[Trailing] 📊 Paper/Recovery SL Update: ${oldSL} -> ${newSL}`);
+                    await TradeHistoryService.saveTrade(activeTrade);
+                    this.io.emit('trade-history-update', activeTrade);
+                }
+                return; 
+            }
+
+            // --- REAL TRADE SYNC LOGIC ---
             let pos: any = this.currentPosition;
-            console.log(pos,'pos+++++++')
             const cleanS = (pair || '').replace('B-', '').toLowerCase();
 
             if (!pos) {
-                // If we think a trade is open but have no cached pos, force a REST fetch
                 const positions = await TradeService.getPositions();
                 pos = Array.isArray(positions)
                     ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
                     : null;
-                console.log(pos,'pos+++++++123')   
+                
                 if (pos) {
                     console.log(`[Trailing] 🎉 Restored position from REST: @ ${pos.entry_price}`);
                     this.currentPosition = pos;
                 } else {
-                    // DESYNC HANDLER: Local says open but exchange says NONE
                     console.warn(`[Trailing] 🚑 Self-Correction: Local state says OPEN but exchange is FLAT. Force resetting status.`);
                     await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
                     this.io.emit('settings-update', SettingsService.getSettings());
                     return;
                 }
             }
-
-            const activeTrade = await TradeHistoryService.getActiveTrade();
             if (activeTrade && activeTrade.status === 'open') {
                 const oldSL = activeTrade.sl || Number(pos.stop_loss_price || pos.stop_loss_trigger || 0);
                 
@@ -414,6 +436,15 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             }
 
             const pair = settings.pair;
+            const latestCandle = this.candles[this.candles.length - 1];
+            
+            if (!latestCandle) return;
+
+            // 🛑 GUARD: Prevent multiple entries for the same candle (Real vs Paper race)
+            if (this.lastSignalTime === latestCandle.time) {
+                return;
+            }
+
             const leverage = settings.leverage;
             const initialCapital = settings.initialCapital;
             const from = Math.floor(Date.now() / 1000) - 86400; 
@@ -499,6 +530,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
 console.log(result,'result---')
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
+                this.lastSignalTime = latestCandle.time; // 🔒 LOCK: Prevent duplicate entries for this candle
                 console.log(`[Strategy] 🎯 SIGNAL DETECTED: ${latest.direction} for ${pair}`);
                 this.io.emit('strategy-signal', { pair, trade: latest });
 
@@ -697,8 +729,8 @@ console.log(result,'result---')
                 pair: pair,
                 capital: settings.initialCapital,
                 leverage: settings.leverage,
-                atrMultiplierSL: 1, 
-                simulationStartUnix: Math.floor(startOfDay / 1000) // 🎯 ONLY record trades from 00:00 onwards
+                atrMultiplierSL: 0.8, // 🎯 Sync with Strategy Default for exact parity
+                simulationStartUnix: Math.floor(startOfDay / 1000) 
             }, subCandles);
 
             // 5. Persist recovered trades

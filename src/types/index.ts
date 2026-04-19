@@ -19,7 +19,7 @@ export interface Trade {
     units?: number | undefined; 
     fee?: number | undefined;
     trailingCount?: number | undefined;
-    type?: 'manual' | 'auto' | 'paper' | 'real' | undefined;
+    type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
     executionError?: string | undefined;
 }
