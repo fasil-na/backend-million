@@ -22,7 +22,7 @@ const tradeSchema = new mongoose.Schema({
     units: Number,
     fee: Number,
     trailingCount: Number,
-    type: { type: String, enum: ['manual', 'auto'], default: 'auto' },
+    type: { type: String, enum: ['manual', 'auto', 'paper', 'real'], default: 'auto' },
     pair: String,
     executionError: String
 }, {
