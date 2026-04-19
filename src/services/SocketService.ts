@@ -331,6 +331,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             }
 
             let pos: any = this.currentPosition;
+            console.log(pos,'pos+++++++')
             const cleanS = (pair || '').replace('B-', '').toLowerCase();
 
             if (!pos) {
@@ -339,7 +340,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 pos = Array.isArray(positions)
                     ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
                     : null;
-                
+                console.log(pos,'pos+++++++123')   
                 if (pos) {
                     console.log(`[Trailing] 🎉 Restored position from REST: @ ${pos.entry_price}`);
                     this.currentPosition = pos;
@@ -633,6 +634,104 @@ console.log(result,'result---')
             }
         } catch (err: any) {
             console.error("Monitor status failed:", err.message);
+        }
+    }
+
+    /**
+     * Reconstructs the current day's trade history (from 00:00) 
+     * by running a dedicated backtest on the strategy.
+     */
+    static async recoverTodayTrades() {
+        try {
+            const settings = SettingsService.getSettings();
+            const pair = settings.pair;
+            const resolution = settings.timeInterval;
+            
+            // Start of today in IST (Kolkata)
+            const todayKolkata = dayjs().tz('Asia/Kolkata').startOf('day');
+            const startOfDay = todayKolkata.valueOf();
+            
+            // 🚀 WARM-UP FIX: Fetch 12 hours before today to prime EMA/ATR indicators
+            const from = Math.floor((startOfDay - (12 * 60 * 60 * 1000)) / 1000); 
+            const to = Math.floor(Date.now() / 1000);
+
+            console.log(`[Recovery] 🔄 Recovering trade history for ${pair} with 12h warm-up...`);
+
+            // 1. Fetch main candles
+            const response = await CoinDCXApiService.getCandlesticks({
+                pair,
+                from,
+                to,
+                resolution
+            });
+
+            if (response.s !== 'ok' || !Array.isArray(response.data)) {
+                console.warn("[Recovery] ⚠️ No data found to recover.");
+                return;
+            }
+
+            const candles = response.data.sort((a: any, b: any) => a.time - b.time);
+
+            // 2. Fetch 1m sub-candles for accurate SL/TP simulation
+            let subCandles: Candle[] = [];
+            if (resolution !== '1') {
+                const subRes = await CoinDCXApiService.getCandlesticks({
+                    pair,
+                    from,
+                    to,
+                    resolution: '1'
+                });
+                if (subRes.s === 'ok' && Array.isArray(subRes.data)) {
+                    subCandles = subRes.data.sort((a: any, b: any) => a.time - b.time);
+                }
+            }
+
+            // 3. Select Strategy
+            const selectedStrategyId = settings.selectedStrategyId || 'opening-breakout'; 
+            const strategy = (strategies as any)[selectedStrategyId];
+            if (!strategy) return;
+
+            // 4. Run Backtest Simulation
+            const result = strategy.run(candles, {
+                type: 'backtest',
+                pair: pair,
+                capital: settings.initialCapital,
+                leverage: settings.leverage,
+                atrMultiplierSL: 1, 
+                simulationStartUnix: Math.floor(startOfDay / 1000) // 🎯 ONLY record trades from 00:00 onwards
+            }, subCandles);
+
+            // 5. Persist recovered trades
+            if (result && result.trades) {
+                for (const t of result.trades) {
+                    await TradeHistoryService.saveTrade({
+                        ...t,
+                        pair,
+                        type: 'recovery',
+                        status: 'closed'
+                    });
+                }
+            }
+
+            // 6. Sync active trade if one exists at the end of the simulation
+            if (result && result.activeTrade) {
+                const active = result.activeTrade;
+                await TradeHistoryService.saveTrade({
+                    ...active,
+                    pair,
+                    type: 'recovery',
+                    status: 'open'
+                });
+                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                this.io.emit('settings-update', SettingsService.getSettings());
+            } else {
+                await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+                this.io.emit('settings-update', SettingsService.getSettings());
+            }
+
+            console.log(`[Recovery] ✅ Synced ${result?.trades?.length || 0} historical trades for today.`);
+        } catch (err: any) {
+            console.error('[Recovery] ❌ Failed to recover today\'s state:', err.message);
         }
     }
 }

@@ -40,6 +40,9 @@ const start = async () => {
 
         // Start services
         SocketService.init(server);
+
+        // 🔄 Sync State: Recover any trades that occurred while the server was offline
+        SocketService.recoverTodayTrades();
         
         server.listen(Number(PORT), "0.0.0.0", () => {
             console.log(`🚀 Terminal Million Backend running on http://localhost:${PORT}`);
