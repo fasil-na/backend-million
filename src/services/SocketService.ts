@@ -62,13 +62,13 @@ export class SocketService {
         });
 
 
-if (settings.isLiveTrading) {
-    const marginCurrency = settings.pair.includes('USDT') ? 'USDT' : 'INR';
+// if (settings.isLiveTrading) {
+//     const marginCurrency = settings.pair.includes('USDT') ? 'USDT' : 'INR';
 
-    TradeService.syncLiveBalance(marginCurrency)
-        .then(() => console.log('✅ Initial live balance synced'))
-        .catch(err => console.error('❌ Initial balance sync failed', err));
-}
+//     // await TradeService.syncLiveBalance(marginCurrency)
+//         .then(() => console.log('✅ Initial live balance synced'))
+//         .catch(err => console.error('❌ Initial balance sync failed', err));
+// }
     }
 
     private static formatChannel(pair: string, resolution: string = DEFAULT_RESOLUTION) {
@@ -264,7 +264,8 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             if (settings.isLiveTrading) {
                 const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
                 try {
-                    await TradeService.syncLiveBalance(marginCurrency);
+                    // 🎯 Removed bankBalance sync to avoid AWS 404/GET body issues
+                    // await TradeService.syncLiveBalance(marginCurrency);
                 } catch (err) {
                     console.error('[Position] Balance sync failed:', err);
                 }
@@ -446,18 +447,24 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 }
             }
 
-            // For backtest (simulation), we use `initialCapital` directly.
+            // 🎯 NEW RISK LOGIC (Fallback-free):
+            // If mode is 'capital', we use the manual budget (e.g. $250).
+            // If mode is 'minimal', we use the exchange's absolute minimum required ($6).
             let liveCapital = initialCapital;
-
-            // Enforce Minimum Risk Sizing in Live Auto Trading:
-            // Force the strategy to structure its trade size using EXACTLY the bare minimum capital 
-            // required to hit the exchange's limits ($6.00). Setting to 110% of minimum for safety buffer.
             if (settings.isLiveTrading) {
                 const cleanS = (pair || '').replace('B-', '').toLowerCase();
                 const staticData = TradeService.STATIC_INSTRUMENTS[cleanS] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || { minNotional: 6 };
-                const safeNotional = (staticData.minNotional || 6) * 1.10; 
-                liveCapital = safeNotional / leverage;
-                console.log(`[Strategy] 🛡️ Minimum Risk Sizing: Scaling position down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional requirement at ${leverage}x leverage.`);
+                const minNotional = staticData.minNotional || 6;
+                
+                if (settings.riskMode === 'capital') {
+                    liveCapital = settings.initialCapital || 100;
+                    console.log(`[Strategy] 💰 Capital Mode: Using $${liveCapital} of capital at ${leverage}x leverage.`);
+                } else {
+                    // Minimal Mode: Safety buffer 110% of minimum
+                    const safeNotional = minNotional * 1.10; 
+                    liveCapital = safeNotional / leverage;
+                    console.log(`[Strategy] 🛡️ Minimal Mode: Scaling down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional.`);
+                }
             }
 
             // 4. Run Strategy Check
@@ -516,7 +523,21 @@ console.log(result,'result---')
                         });
                         console.log(`[Strategy] 🏁 Trade cycle initialized.`);
                     } catch (err: any) {
-                        console.error('[Strategy] ❌ Execution Failed:', err.message);
+                        const errorMessage = err.response?.data?.message || err.message;
+                        console.error('[Strategy] ❌ Execution Failed:', errorMessage);
+
+                        // 🎯 RECORD FAILED AUTO-TRADE
+                        await TradeHistoryService.saveTrade({
+                            ...latest,
+                            pair,
+                            direction: latest.direction,
+                            entryPrice: latest.entryPrice,
+                            status: 'failed',
+                            type: 'auto',
+                            profit: 0,
+                            entryTime: new Date().toISOString(),
+                            executionError: errorMessage
+                        });
                     } finally {
                         this.isPlacingOrder = false;
                     }

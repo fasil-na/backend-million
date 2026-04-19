@@ -14,7 +14,7 @@ const tradeSchema = new mongoose.Schema({
     tp: Number,
     stop_loss_price: Number,
     take_profit_price: Number,
-    status: { type: String, enum: ['open', 'closed'], required: true },
+    status: { type: String, enum: ['open', 'closed', 'failed'], required: true },
     profit: { type: Number, default: 0 },
     exitReason: String,
     lastHigh: Number,
@@ -23,7 +23,8 @@ const tradeSchema = new mongoose.Schema({
     fee: Number,
     trailingCount: Number,
     type: { type: String, enum: ['manual', 'auto'], default: 'auto' },
-    pair: String
+    pair: String,
+    executionError: String
 }, {
     timestamps: true
 });

@@ -9,6 +9,7 @@ const settingsSchema = new mongoose.Schema({
     initialCapital: { type: Number, default: 1000 },
     selectedStrategyId: { type: String, default: 'opening-breakout' },
     bankBalance: { type: Number, default: 0 },
+    riskMode: { type: String, enum: ['minimal', 'capital'], default: 'minimal' },
     activeTradeStatus: { type: String, default: 'closed' }
 }, {
     timestamps: true,

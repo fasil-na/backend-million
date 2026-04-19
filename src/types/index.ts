@@ -11,7 +11,7 @@ export interface Trade {
     tp?: number | undefined;
     stop_loss_price?: number | undefined;
     take_profit_price?: number | undefined;
-    status: 'open' | 'closed';
+    status: 'open' | 'closed' | 'failed';
     profit: number;
     exitReason?: string | undefined;
     lastHigh?: number | undefined;
@@ -21,6 +21,7 @@ export interface Trade {
     trailingCount?: number | undefined;
     type?: 'manual' | 'auto' | undefined;
     pair?: string | undefined;
+    executionError?: string | undefined;
 }
 
 export interface Candle {
