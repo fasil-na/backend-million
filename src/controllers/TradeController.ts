@@ -95,9 +95,9 @@ export class TradeController {
                     sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
                     status: 'open',
                     profit: 0,
-                    type: 'manual'
+                    type: 'real'
                 });
-
+                      await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                 return res.json(result);
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;
@@ -110,7 +110,7 @@ export class TradeController {
                     sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
                     status: 'failed',
                     profit: 0,
-                    type: 'manual',
+                    type: 'real',
                     executionError: errorMessage
                 });
 
