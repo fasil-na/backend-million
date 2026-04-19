@@ -114,7 +114,6 @@ console.log(trade,'trade------')
 
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
-        return;
         try {
             console.log(`[TradeService] 🚀 Executing ${trade.direction?.toUpperCase()} order for ${pair}...`);
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/create`, body, {
