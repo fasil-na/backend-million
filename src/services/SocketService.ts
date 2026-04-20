@@ -733,6 +733,8 @@ console.log(result,'result---')
                 pair: pair,
                 capital: settings.initialCapital,
                 leverage: settings.leverage,
+                maxPositionSize: settings.maxPositionSize || 100,
+                trailingSL: settings.trailingSL !== undefined ? settings.trailingSL : true,
                 atrMultiplierSL: 1.0, 
                 simulationStartUnix: Math.floor(startOfDay / 1000) 
             }, subCandles);

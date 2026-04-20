@@ -10,7 +10,9 @@ const settingsSchema = new mongoose.Schema({
     selectedStrategyId: { type: String, default: 'opening-breakout' },
     bankBalance: { type: Number, default: 0 },
     riskMode: { type: String, enum: ['minimal', 'capital'], default: 'minimal' },
-    activeTradeStatus: { type: String, default: 'closed' }
+    activeTradeStatus: { type: String, default: 'closed' },
+    maxPositionSize: { type: Number, default: 100 },
+    trailingSL: { type: Boolean, default: true }
 }, {
     timestamps: true,
     // We only ever want one settings document for this app

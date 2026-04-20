@@ -10,7 +10,9 @@ export interface AppSettings {
     selectedStrategyId: string;
     bankBalance?: number;
     activeTradeStatus:string;
-    riskMode:string
+    riskMode:string;
+    maxPositionSize: number;
+    trailingSL: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -22,7 +24,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     initialCapital: 1000,
     selectedStrategyId: 'opening-breakout',
     activeTradeStatus:"closed",
-    riskMode:"minimal"
+    riskMode:"minimal",
+    maxPositionSize: 100,
+    trailingSL: true
 };
 
 export class SettingsService {
