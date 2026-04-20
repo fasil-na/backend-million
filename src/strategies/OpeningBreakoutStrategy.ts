@@ -25,7 +25,8 @@ console.log(type,'type-----')
 
         const {
             feeRate = 0.0005,
-            simulationStartUnix = 0
+            simulationStartUnix = 0,
+            atrMultiplierSL = 1.0
         } = params;
 
 

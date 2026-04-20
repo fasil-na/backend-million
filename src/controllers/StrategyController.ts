@@ -69,7 +69,12 @@ export class StrategyController {
                         const strategy = strategies[req.body.strategyId || 'opening-breakout'] as any;
                         if (strategy) {
                             const result = strategy.run(candles, {
-                                ...req.body, leverage, capital: currentCapital, simulationStartUnix: simStart, type: 'backtest'
+                                ...req.body, 
+                                leverage, 
+                                atrMultiplierSL: 1.0, 
+                                capital: currentCapital, 
+                                simulationStartUnix: simStart, 
+                                type: 'backtest'
                             }, subCandles);
                             
                             if ('trades' in result) {

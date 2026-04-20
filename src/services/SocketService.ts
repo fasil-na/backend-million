@@ -528,7 +528,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 type: 'live',
                 capital: liveCapital,
                 leverage: leverage,
-                atrMultiplierSL: 1,
+                atrMultiplierSL: 1.0,
                 simulationStartUnix: from
             });
 console.log(result,'result---')
@@ -733,7 +733,7 @@ console.log(result,'result---')
                 pair: pair,
                 capital: settings.initialCapital,
                 leverage: settings.leverage,
-                atrMultiplierSL: 0.8, // 🎯 Sync with Strategy Default for exact parity
+                atrMultiplierSL: 1.0, 
                 simulationStartUnix: Math.floor(startOfDay / 1000) 
             }, subCandles);
 
