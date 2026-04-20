@@ -342,17 +342,17 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             // 🛡️ RECOVERY/PAPER BYPASS: If it's a simulated trade, don't check the exchange
             if (activeTrade.type === 'paper' || activeTrade.type === 'recovery') {
                 // Update SL logic
+                const preSL = activeTrade.sl || 0;
                 updateTrailingSL(activeTrade, lastCandle);
                 
                 const cleanPair = (pair || '').replace('B-', '').toLowerCase();
                 const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
                 const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
                 
-                const oldSL = activeTrade.sl || 0;
                 const newSL = Number((activeTrade.sl || 0).toFixed(pricePrecision));
 
-                if (Math.abs(newSL - oldSL) > (oldSL * 0.0001)) {
-                    console.log(`[Trailing] 📊 Paper/Recovery SL Update: ${oldSL} -> ${newSL}`);
+                if (Math.abs(newSL - preSL) > (preSL * 0.0001)) {
+                    console.log(`[Trailing] 📊 Paper/Recovery SL Update: ${preSL} -> ${newSL}`);
                     await TradeHistoryService.saveTrade(activeTrade);
                     this.io.emit('trade-history-update', activeTrade);
                 }
