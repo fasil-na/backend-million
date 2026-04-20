@@ -140,21 +140,34 @@ export class EmaCrossoverStrategy implements Strategy {
     }
 
     public static updateTrailingSL(trade: Trade, candle: Candle): void {
+        const currentPrice = candle.close;
+        
         if (trade.direction === 'buy') {
             const lastHigh = trade.lastHigh ?? trade.entryPrice;
             if (candle.high > lastHigh) {
                 const move = candle.high - lastHigh;
-                trade.sl = (trade.sl || trade.entryPrice) + move;
-                trade.lastHigh = candle.high;
-                trade.trailingCount = (trade.trailingCount || 0) + 1;
+                const newSl = (trade.sl || trade.entryPrice) + move;
+                
+                // If the new SL jumped above the current closing price (retrace), skip this update completely
+                // to prevent breaking the SL-to-High geometric distance and avoid exchange rejection.
+                if (newSl < currentPrice) {
+                    trade.sl = newSl;
+                    trade.lastHigh = candle.high;
+                    trade.trailingCount = (trade.trailingCount || 0) + 1;
+                }
             }
         } else {
             const lastLow = trade.lastLow ?? trade.entryPrice;
             if (candle.low < lastLow) {
                 const move = lastLow - candle.low;
-                trade.sl = (trade.sl || trade.entryPrice) - move;
-                trade.lastLow = candle.low;
-                trade.trailingCount = (trade.trailingCount || 0) + 1;
+                const newSl = (trade.sl || trade.entryPrice) - move;
+                
+                // If new SL dropped below current closing price, skip update
+                if (newSl > currentPrice) {
+                    trade.sl = newSl;
+                    trade.lastLow = candle.low;
+                    trade.trailingCount = (trade.trailingCount || 0) + 1;
+                }
             }
         }
     }

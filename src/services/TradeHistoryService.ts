@@ -64,7 +64,7 @@ export class TradeHistoryService {
     static async findOverlap(pair: string, entryTime: string): Promise<Trade | null> {
         if (mongoose.connection.readyState !== 1) return null;
         try {
-            const windowMs = 5 * 60 * 1000; // 5 minute window
+            const windowMs = 3 * 60 * 1000; // 3 minute window
             const targetTime = new Date(entryTime).getTime();
             const start = new Date(targetTime - windowMs).toISOString();
             const end = new Date(targetTime + windowMs).toISOString();
@@ -89,7 +89,12 @@ export class TradeHistoryService {
 
     static async clearAll() {
         try {
-            await TradeModel.deleteMany({});
+            await TradeModel.deleteMany({
+                $or: [
+                    { status: { $ne: 'open' } },
+                    { type: { $nin: ['real', 'paper'] } }
+                ]
+            });
         } catch (e) {
             console.error("Error clearing trades from MongoDB:", e);
         }
