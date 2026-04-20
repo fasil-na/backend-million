@@ -336,10 +336,13 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
                 return;
             }
 
+            const strategy = strategies[settings.selectedStrategyId || 'opening-breakout'] as any;
+            const updateTrailingSL = strategy.constructor?.updateTrailingSL || OpeningBreakoutStrategy.updateTrailingSL;
+
             // 🛡️ RECOVERY/PAPER BYPASS: If it's a simulated trade, don't check the exchange
             if (activeTrade.type === 'paper' || activeTrade.type === 'recovery') {
-                // For paper trades, we just use the last candle to update SL
-                OpeningBreakoutStrategy.updateTrailingSL(activeTrade, lastCandle);
+                // Update SL logic
+                updateTrailingSL(activeTrade, lastCandle);
                 
                 const cleanPair = (pair || '').replace('B-', '').toLowerCase();
                 const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
@@ -379,7 +382,8 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             if (activeTrade && activeTrade.status === 'open') {
                 const oldSL = activeTrade.sl || Number(pos.stop_loss_price || pos.stop_loss_trigger || 0);
                 
-                OpeningBreakoutStrategy.updateTrailingSL(activeTrade, lastCandle);
+                // Update SL logic
+                updateTrailingSL(activeTrade, lastCandle);
 
                 const calculatedSL = activeTrade.sl || oldSL;
                 
