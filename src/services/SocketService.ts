@@ -740,6 +740,13 @@ console.log(result,'result---')
             // 5. Persist recovered trades
             if (result && result.trades) {
                 for (const t of result.trades) {
+                    // 🛡️ DUAL-TRADE PROTECTION: Skip if a Real/Paper trade already exists for this signal
+                    const overlap = await TradeHistoryService.findOverlap(pair, t.entryTime);
+                    if (overlap) {
+                        console.log(`[Recovery] ⏭️ Skipping recovery for ${pair} at ${t.entryTime} (Real/Paper trade found)`);
+                        continue;
+                    }
+
                     await TradeHistoryService.saveTrade({
                         ...t,
                         pair,
@@ -752,17 +759,35 @@ console.log(result,'result---')
             // 6. Sync active trade if one exists at the end of the simulation
             if (result && result.activeTrade) {
                 const active = result.activeTrade;
-                await TradeHistoryService.saveTrade({
-                    ...active,
-                    pair,
-                    type: 'recovery',
-                    status: 'open'
-                });
-                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                this.io.emit('settings-update', SettingsService.getSettings());
+                
+                // 🛡️ DUAL-TRADE PROTECTION for Active Trade
+                const existingActive = await TradeHistoryService.getActiveTrade();
+                const overlap = await TradeHistoryService.findOverlap(pair, active.entryTime);
+
+                if (existingActive || overlap) {
+                    console.log(`[Recovery] ⏭️ Active trade already exists for ${pair}. Skipping recovery version.`);
+                    const s = SettingsService.getSettings();
+                    if (s.activeTradeStatus !== 'open') {
+                        await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                        this.io.emit('settings-update', SettingsService.getSettings());
+                    }
+                } else {
+                    await TradeHistoryService.saveTrade({
+                        ...active,
+                        pair,
+                        type: 'recovery',
+                        status: 'open'
+                    });
+                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                    this.io.emit('settings-update', SettingsService.getSettings());
+                }
             } else {
-                await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                this.io.emit('settings-update', SettingsService.getSettings());
+                // Only mark closed if there's no existing REAL/PAPER trade open
+                const existingRealActive = await TradeHistoryService.getActiveTrade();
+                if (!existingRealActive) {
+                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+                    this.io.emit('settings-update', SettingsService.getSettings());
+                }
             }
 
             console.log(`[Recovery] ✅ Synced ${result?.trades?.length || 0} historical trades for today.`);

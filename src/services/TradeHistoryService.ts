@@ -49,10 +49,32 @@ export class TradeHistoryService {
     static async getActiveTrade(): Promise<Trade | null> {
         if (mongoose.connection.readyState !== 1) return null;
         try {
-            const trade = await TradeModel.findOne({ status: 'open' }).lean();
+            const trade = await TradeModel.findOne({ status: 'open' }).sort({ entryTime: -1 }).lean();
             return trade as Trade | null;
         } catch (e) {
             console.error("Error getting active trade from MongoDB:", e);
+            return null;
+        }
+    }
+
+    /**
+     * Checks if a trade already exists within a 5-minute window of the given time.
+     * Prevents duplicate logs when real trades and recovery logic overlap.
+     */
+    static async findOverlap(pair: string, entryTime: string): Promise<Trade | null> {
+        if (mongoose.connection.readyState !== 1) return null;
+        try {
+            const windowMs = 5 * 60 * 1000; // 5 minute window
+            const targetTime = new Date(entryTime).getTime();
+            const start = new Date(targetTime - windowMs).toISOString();
+            const end = new Date(targetTime + windowMs).toISOString();
+
+            return await TradeModel.findOne({
+                pair,
+                entryTime: { $gte: start, $lte: end },
+                type: { $in: ['real', 'paper'] }
+            }).lean() as Trade | null;
+        } catch (e) {
             return null;
         }
     }
