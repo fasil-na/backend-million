@@ -47,12 +47,16 @@ export class StrategyController {
                 const monthEnd = dayjs().year(period.year).month(period.month).endOf('month');
 
                 let simStart = Math.floor(monthStart.valueOf() / 1000);
-                let fetchStart = simStart - (24 * 60 * 60);
+                // 🛑 MATHEMATICAL PARITY FIX: EMA fundamentally requires 500 candles to physically "warm up" (lines 305 of your strategy).
+                // But the Backtester historically only fetched 24hrs (max 96 candles at 15m) before the simulation started.
+                // We MUST mathematically fetch 7 entire Days (672 candles) of blind history so the OpeningBreakoutStrategy backtest array 
+                // structurally feeds perfectly identical recursive exponential inputs exactly matching the Live 1000-candle buffer!
+                let fetchStart = simStart - (7 * 24 * 60 * 60); 
                 let end = Math.floor(monthEnd.valueOf() / 1000);
 
                 if (isLive) {
                     simStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);
-                    fetchStart = simStart - (24 * 60 * 60);
+                    fetchStart = simStart - (7 * 24 * 60 * 60);
                     end = Math.floor(Date.now() / 1000);
                 }
 

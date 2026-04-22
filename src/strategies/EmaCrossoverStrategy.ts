@@ -126,8 +126,6 @@ export class EmaCrossoverStrategy implements Strategy {
                         currentTrade = null;
                     }
                 }
-                
-                continue;
             }
 
             const signal = this.getSignal(candles, i);

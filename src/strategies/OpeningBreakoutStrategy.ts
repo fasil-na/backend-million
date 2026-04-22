@@ -147,7 +147,8 @@ console.log(type,'type-----')
                         break; // Exit the sub-candle loop
                     }
                 }
-                continue;
+                // -----
+                // continue;
             }
 
             if (!waiting) {
