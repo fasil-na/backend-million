@@ -524,14 +524,17 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             }
 
             // 4. Run Strategy Check
-            console.log(`[Strategy] 🔍 Scanning ${this.candles.length} candles for '${selectedStrategyId}' signal...`);
+            const hasTradedToday = await TradeHistoryService.hasTradedToday(pair);
+            console.log(`[Strategy] 🔍 Scanning ${this.candles.length} candles for '${selectedStrategyId}' signal... ${hasTradedToday ? '(Lockout Active)' : ''}`);
+
             const result = strategy.run(this.candles, {
-                pair: pair, // 🛑 CRITICAL FIX: Pass pair down so mathematical strategies know which numeric limits to obey!
+                pair: pair, 
                 type: 'live',
                 capital: liveCapital,
                 leverage: leverage,
                 atrMultiplierSL: 1.0,
-                simulationStartUnix: from
+                simulationStartUnix: from,
+                hasTradedToday // 🛡️ One-and-Done Lockout for OpeningBreakout
             });
 console.log(result,'result---')
             if ('matched' in result && result.matched && result.trade) {

@@ -79,6 +79,26 @@ export class TradeHistoryService {
         }
     }
 
+    static async hasTradedToday(pair: string): Promise<boolean> {
+        if (mongoose.connection.readyState !== 1) return false;
+        try {
+            const dayStart = new Date();
+            dayStart.setHours(0, 0, 0, 0);
+            
+            const count = await TradeModel.countDocuments({
+                pair,
+                entryTime: { $gte: dayStart.toISOString() },
+                type: { $in: ['real', 'paper', 'recovery'] }, // Include recovery trades!
+                status: { $ne: 'failed' } // Don't count failed attempts as a "used" slot
+            });
+            
+            return count > 0;
+        } catch (e) {
+            console.error("Error checking today's trades:", e);
+            return false;
+        }
+    }
+
     static async deleteTrade(entryTime: string) {
         try {
             await TradeModel.deleteOne({ entryTime });

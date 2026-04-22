@@ -287,6 +287,11 @@ console.log(type,'type-----')
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
         if (candles.length < 10) return { matched: false };
+        
+        // 🛡️ One-and-Done Lockout: If the database reports we already traded today, do not evaluate!
+        if (params.hasTradedToday) {
+            return { matched: false };
+        }
         // Evaluate signals on the most recently *closed* candle (length - 2),
         // because length - 1 is the brand new forming candle when this is triggered.
         const i = candles.length - 2;
