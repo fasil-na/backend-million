@@ -187,6 +187,12 @@ console.log(type,'type-----')
                     trade.sl = newSl;
                     trade.lastHigh = candle.high;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    if (!trade.trailingHistory) trade.trailingHistory = [];
+                    trade.trailingHistory.push({
+                        sl: newSl,
+                        marketPrice: currentPrice,
+                        time: dayjs().toISOString()
+                    });
                 }
             }
         } else {
@@ -200,6 +206,12 @@ console.log(type,'type-----')
                     trade.sl = newSl;
                     trade.lastLow = candle.low;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    if (!trade.trailingHistory) trade.trailingHistory = [];
+                    trade.trailingHistory.push({
+                        sl: newSl,
+                        marketPrice: currentPrice,
+                        time: dayjs().toISOString()
+                    });
                 }
             }
         }
@@ -231,8 +243,20 @@ console.log(type,'type-----')
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
         const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
-        const atr = this.calculateATR(candles, 14, i);
-        let sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+        const atr = Math.abs(this.calculateATR(candles, 14, i));
+        const multiplier = Math.abs(atrMultiplierSL);
+        const offset = atr * multiplier;
+        
+        let sl = direction === 'buy' ? entry - offset : entry + offset;
+
+        // 🛑 CRITICAL SANITY GUARD: Ensure SL is on the correct side of Entry
+        if (direction === 'buy' && sl >= entry) {
+            console.error(`[OpeningBreakout] 🚨 BLUNDER DETECTED: Buy SL (${sl}) >= Entry (${entry}). Correcting to forced offset.`);
+            sl = entry - (entry * 0.01); // Force 1% SL as emergency fallback
+        } else if (direction === 'sell' && sl <= entry) {
+            console.error(`[OpeningBreakout] 🚨 BLUNDER DETECTED: Sell SL (${sl}) <= Entry (${entry}). Correcting to forced offset.`);
+            sl = entry + (entry * 0.01);
+        }
 
         // 🎯 Enforce Native Precision Rules on Entry Stop Loss
         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
@@ -256,7 +280,8 @@ console.log(type,'type-----')
             profit: 0,
             lastHigh: entry,
             lastLow: entry,
-            units
+            units,
+            initialSL: sl
         };
     }
 

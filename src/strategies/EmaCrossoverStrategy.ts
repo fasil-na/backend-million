@@ -189,8 +189,20 @@ export class EmaCrossoverStrategy implements Strategy {
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
         const { atrMultiplierSL = 1.0, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
-        const atr = this.calculateATR(candles, 14, i);
-        let sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+        const atr = Math.abs(this.calculateATR(candles, 14, i));
+        const multiplier = Math.abs(atrMultiplierSL);
+        const offset = atr * multiplier;
+        
+        let sl = direction === 'buy' ? entry - offset : entry + offset;
+
+        // 🛑 CRITICAL SANITY GUARD: Ensure SL is on the correct side of Entry
+        if (direction === 'buy' && sl >= entry) {
+            console.error(`[EmaCrossover] 🚨 BLUNDER DETECTED: Buy SL (${sl}) >= Entry (${entry}). Correcting to forced offset.`);
+            sl = entry - (entry * 0.01); // Force 1% SL as emergency fallback
+        } else if (direction === 'sell' && sl <= entry) {
+            console.error(`[EmaCrossover] 🚨 BLUNDER DETECTED: Sell SL (${sl}) <= Entry (${entry}). Correcting to forced offset.`);
+            sl = entry + (entry * 0.01);
+        }
 
         // 🎯 Enforce Native Precision Rules on Entry Stop Loss
         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
@@ -214,7 +226,8 @@ export class EmaCrossoverStrategy implements Strategy {
             profit: 0,
             lastHigh: entry,
             lastLow: entry,
-            units
+            units,
+            initialSL: sl
         };
     }
 

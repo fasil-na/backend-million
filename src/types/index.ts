@@ -8,6 +8,7 @@ export interface Trade {
     entryPrice: number;
     exitPrice?: number | undefined;
     sl?: number | undefined;
+    initialSL?: number | undefined;
     tp?: number | undefined;
     stop_loss_price?: number | undefined;
     take_profit_price?: number | undefined;
@@ -22,6 +23,11 @@ export interface Trade {
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
     executionError?: string | undefined;
+    trailingHistory?: {
+        sl: number;
+        marketPrice: number;
+        time: string;
+    }[] | undefined;
 }
 
 export interface Candle {

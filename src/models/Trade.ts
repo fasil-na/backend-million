@@ -11,6 +11,7 @@ const tradeSchema = new mongoose.Schema({
     entryPrice: { type: Number, required: true },
     exitPrice: Number,
     sl: Number,
+    initialSL: Number,
     tp: Number,
     stop_loss_price: Number,
     take_profit_price: Number,
@@ -24,7 +25,12 @@ const tradeSchema = new mongoose.Schema({
     trailingCount: Number,
     type: { type: String, enum: ['manual', 'auto', 'paper', 'real'], default: 'auto' },
     pair: String,
-    executionError: String
+    executionError: String,
+    trailingHistory: [{
+        sl: Number,
+        marketPrice: Number,
+        time: String
+    }]
 }, {
     timestamps: true
 });
