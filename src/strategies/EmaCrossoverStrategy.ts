@@ -94,7 +94,10 @@ export class EmaCrossoverStrategy implements Strategy {
                         const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
                         trade.fee = fee;
                         trade.profit = profit;
-                        allTrades.push(trade);
+                        
+                        // 📸 DEEP SNAPSHOT
+                        allTrades.push(JSON.parse(JSON.stringify(trade)));
+                        
                         currentBalance += profit;
                         currentTrade = null;
                         break;
@@ -121,7 +124,10 @@ export class EmaCrossoverStrategy implements Strategy {
                         const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
                         trade.fee = fee;
                         trade.profit = profit;
-                        allTrades.push(trade);
+                        
+                        // 📸 DEEP SNAPSHOT
+                        allTrades.push(JSON.parse(JSON.stringify(trade)));
+                        
                         currentBalance += profit;
                         currentTrade = null;
                     }
@@ -134,7 +140,11 @@ export class EmaCrossoverStrategy implements Strategy {
             }
         }
 
-        return { trades: allTrades, finalBalance: currentBalance, activeTrade: currentTrade };
+        return { 
+            trades: allTrades, 
+            finalBalance: currentBalance, 
+            activeTrade: currentTrade ? JSON.parse(JSON.stringify(currentTrade)) : null 
+        };
     }
 
     public static updateTrailingSL(trade: Trade, candle: Candle): void {
@@ -146,12 +156,20 @@ export class EmaCrossoverStrategy implements Strategy {
                 const move = candle.high - lastHigh;
                 const newSl = (trade.sl || trade.entryPrice) + move;
                 
-                // If the new SL jumped above the current closing price (retrace), skip this update completely
-                // to prevent breaking the SL-to-High geometric distance and avoid exchange rejection.
-                if (newSl < currentPrice) {
+                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
+                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
+
+                if (newSl < currentPrice && change > threshold) {
                     trade.sl = newSl;
                     trade.lastHigh = candle.high;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    
+                    if (!trade.trailingHistory) trade.trailingHistory = [];
+                    trade.trailingHistory.push({
+                        sl: Number(newSl.toFixed(4)),
+                        marketPrice: Number(currentPrice.toFixed(4)),
+                        time: dayjs(candle.time).toISOString()
+                    });
                 }
             }
         } else {
@@ -160,11 +178,20 @@ export class EmaCrossoverStrategy implements Strategy {
                 const move = lastLow - candle.low;
                 const newSl = (trade.sl || trade.entryPrice) - move;
                 
-                // If new SL dropped below current closing price, skip update
-                if (newSl > currentPrice) {
+                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
+                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
+
+                if (newSl > currentPrice && change > threshold) {
                     trade.sl = newSl;
                     trade.lastLow = candle.low;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    
+                    if (!trade.trailingHistory) trade.trailingHistory = [];
+                    trade.trailingHistory.push({
+                        sl: Number(newSl.toFixed(4)),
+                        marketPrice: Number(currentPrice.toFixed(4)),
+                        time: dayjs(candle.time).toISOString()
+                    });
                 }
             }
         }
@@ -227,7 +254,9 @@ export class EmaCrossoverStrategy implements Strategy {
             lastHigh: entry,
             lastLow: entry,
             units,
-            initialSL: sl
+            initialSL: sl,
+            trailingCount: 0,
+            trailingHistory: []
         };
     }
 

@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 import type { Trade } from '../types/index.js';
 
+const trailingStepSchema = new mongoose.Schema({
+    sl: Number,
+    marketPrice: Number,
+    time: String
+}, { _id: false });
+
 const tradeSchema = new mongoose.Schema({
     rangeHigh: Number,
     rangeLow: Number,
@@ -23,14 +29,10 @@ const tradeSchema = new mongoose.Schema({
     units: Number,
     fee: Number,
     trailingCount: Number,
-    type: { type: String, enum: ['manual', 'auto', 'paper', 'real'], default: 'auto' },
+    type: { type: String, enum: ['manual', 'auto', 'paper', 'real', 'recovery'], default: 'auto' },
     pair: String,
     executionError: String,
-    trailingHistory: [{
-        sl: Number,
-        marketPrice: Number,
-        time: String
-    }]
+    trailingHistory: [trailingStepSchema]
 }, {
     timestamps: true
 });

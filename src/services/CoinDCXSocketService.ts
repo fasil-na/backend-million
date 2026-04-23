@@ -139,26 +139,28 @@ export class CoinDCXSocketService extends EventEmitter {
                     if (time < 10000000000) time *= 1000; // Convert seconds to milliseconds
 
                     // Extract pair from channel if possible (e.g. "B-BTC_USDT_1m-futures")
-                    let pair = candleData.pair || candleData.s || parsed.channel || response.channel;
+                    let pair = candleData.pair || candleData.s || parsed.channel || response.channel || "";
                     if (pair && pair.includes('_')) {
-                        // strip resolution if present in channel name
-                        pair = pair.split('_').slice(0, 2).join('_');
-                        // if it had a resolution suffix like "1m-futures", cleaning might be more complex
-                        if (pair.includes('-futures')) pair = pair.replace('-futures', '');
-                        // Actually, if it's from channel "B-BTC_USDT_1m-futures", splitting by "_" gives ["B-BTC", "USDT", "1m-futures"]
-                        const parts = (parsed.channel || response.channel || "").split('_');
+                        const parts = pair.split('_');
                         if (parts.length >= 2) {
                             pair = `${parts[0]}_${parts[1]}`.replace('-futures', '');
                         }
                     }
 
+                    // Extract resolution from channel (e.g. "B-BTC_USDT_5m-futures" -> "5")
+                    const channel = (parsed.channel || response.channel || "");
+                    const resMatch = channel.match(/_(\d+)[mhd]/);
+                    const resolution = resMatch ? resMatch[1] : '1';
+
                     const safe = (v: any) => {
                         const n = Number(v);
                         return isNaN(n) ? 0 : n;
                     };
+
                     const formattedCandle = {
                         time: time,
                         pair: pair,
+                        resolution: resolution,
                         open: safe(candleData.open || candleData.o),
                         high: safe(candleData.high || candleData.h),
                         low: safe(candleData.low || candleData.l),

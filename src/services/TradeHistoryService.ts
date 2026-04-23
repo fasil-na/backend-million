@@ -22,17 +22,27 @@ export class TradeHistoryService {
             throw new Error("Database connection error");
         }
         try {
-            // Strip _id and __v to prevent Mongoose from throwing immutable field errors
-            const { _id, __v, ...updateData } = trade as any;
+            // 🛡️ HARDWARE-LEVEL CAPTURE: Explicitly extract the history array
+            // to ensure it is not stripped by destructuring or cloning.
+            const rawTrade: any = trade;
+            const historyToSave = rawTrade.trailingHistory || [];
+            
+            const cleanData = JSON.parse(JSON.stringify(trade));
+            const { _id, __v, ...updateData } = cleanData;
+            
+            // Re-attach explicitly
+            updateData.trailingHistory = historyToSave;
 
-            if (!trade.entryTime) {
+            if (!updateData.entryTime) {
               updateData.entryTime = new Date().toISOString();
             }
+
+            console.log(`📡 DB ATTEMPT: ${updateData.pair} @ ${updateData.entryTime}. Count: ${updateData.trailingCount}, History Items: ${updateData.trailingHistory?.length || 0}`);
 
             const result = await TradeModel.findOneAndUpdate(
                 { entryTime: updateData.entryTime },
                 updateData,
-                { upsert: true, returnDocument: 'after' }
+                { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
             );
             console.log(`✅ Trade history saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
             return result;
@@ -109,12 +119,8 @@ export class TradeHistoryService {
 
     static async clearAll() {
         try {
-            await TradeModel.deleteMany({
-                $or: [
-                    { status: { $ne: 'open' } },
-                    { type: { $nin: ['real', 'paper'] } }
-                ]
-            });
+            await TradeModel.deleteMany({});
+            console.log("🗑️ User Action: Trade history wiped completely.");
         } catch (e) {
             console.error("Error clearing trades from MongoDB:", e);
         }

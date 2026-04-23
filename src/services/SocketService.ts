@@ -29,6 +29,10 @@ export class SocketService {
     private static lastProcessedCandleTime: number | null = null;
     private static lastSignalTime: number | null = null;
 
+    public static getIO() {
+        return this.io;
+    }
+
 
     static init(server: HTTPServer) {
         this.io = new SocketIOServer(server, { 
@@ -106,9 +110,29 @@ export class SocketService {
             this.lastResolution = settings.timeInterval;
             this.lastKnownSLHigh = null;
             this.lastKnownSLLow = null;
-
+            console.log(`[Lifecycle] 🔄 Resolution/Pair changed: ${settings.pair} ${settings.timeInterval}m. Clearing buffer.`);
         }
 
+        // --- RESOLUTION PARTITIONING ---
+        const incomingResolution = (data as any).resolution || '1';
+        const isMainResolution = incomingResolution === settings.timeInterval;
+
+        // 1. Monitor Price always (every tick/candle)
+        if (settings.activeTradeStatus === 'open') {
+            this.monitorRealTimeSL(data).catch(err => console.error('[Monitor] ❌ Check Error:', err.message));
+            
+            // If it's a 1m candle (fast trailing), trigger management immediately 
+            // without waiting for main interval completion.
+            if (incomingResolution === '1') {
+                this.manageTrailingSL(data).catch(err => console.error('[Trailing] ❌ Sync Error:', err.message));
+            }
+        }
+
+        if (!isMainResolution) {
+            return; // Auxiliary resolution (e.g. 1m when main is 5m) - skip strategy logic
+        }
+
+        // --- MAIN STRATEGY LOGIC (Main Timeframe Only) ---
         // O(1) lookup instead of O(n) findIndex
         if (this.candleIndexMap.has(data.time)) {
             // Same candle still forming — just update it
@@ -117,41 +141,29 @@ export class SocketService {
         } else {
             // New candle arrived — previous one is now closed
             const isNewCandleTrigger = this.candles.length > 0;
-console.log(isNewCandleTrigger,'isNewCandleTrigger--')
+            
             // Register in map before pushing
             this.candleIndexMap.set(data.time, this.candles.length);
             this.candles.push(data);
 
-            // Keep buffer capped at 3000 (roughly 50 hours of 1-min data) to ensure 
-            // exact symmetry with the backtester's 48-hour context window.
             if (this.candles.length > 3000) {
                 const removed = this.candles.shift();
                 if (removed) {
-                    this.candleIndexMap.delete(removed.time);
-                    // Rebuild map because all indices shifted by -1 after shift()
                     this.candleIndexMap.clear();
                     this.candles.forEach((c, i) => this.candleIndexMap.set(c.time, i));
                 }
             }
 
-            // --- DUAL TRIGGER LOGIC ---
             if (isNewCandleTrigger) {
-                // Determine if we should process this candle (Cooldown/Duplicate check)
                 const closedCandle:any = this.candles[this.candles.length - 1];
                 if (this.lastProcessedCandleTime !== closedCandle.time) {
                     this.lastProcessedCandleTime = closedCandle.time;
 
-                    // Heartbeat status log
                     const localState = settings.activeTradeStatus.toUpperCase();
                     const exchangeState = this.currentPosition ? 'ACTIVE' : 'NONE';
-                    console.log(`[Status] ${incomingPair}: ${data.close} | Local: ${localState} | Exchange: ${exchangeState} | Flag: closing=${this.isClosingPosition}`);
+                    console.log(`[Status] ${incomingPair} (${incomingResolution}m): ${data.close} | Local: ${localState} | Exchange: ${exchangeState} | Flag: closing=${this.isClosingPosition}`);
 
-                    // 1. ALWAYS manage trailing SL if trade is open
-                    if (settings.activeTradeStatus === 'open') {
-                        this.manageTrailingSL().catch(err => console.error('[Trailing] ❌ Sync Error:', err.message));
-                    }
-
-                    // 2. Continuous Strategy Check on Interval
+                    // Strategy Scan on Interval
                     const intervalMinutes = Number(settings.timeInterval);
                     const currentTime = new Date(closedCandle.time);
                     if (currentTime.getMinutes() % intervalMinutes === 0) {
@@ -165,11 +177,6 @@ console.log(isNewCandleTrigger,'isNewCandleTrigger--')
                     }
                 }
             }
-        }
-
-        // Real-time SL Hit Monitoring (Every tick)
-        if (settings.activeTradeStatus === 'open') {
-            this.monitorRealTimeSL(data).catch(err => console.error('[Monitor] ❌ Check Error:', err.message));
         }
     });
 
@@ -315,7 +322,7 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
 });
 }
 
-    private static async manageTrailingSL() {
+    private static async manageTrailingSL(candleOverride?: Candle) {
         try {
             const settings = SettingsService.getSettings();
             
@@ -325,9 +332,8 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
             }
 
             const pair = settings.pair;
-            const lastCandle = this.candles[this.candles.length - 1];
+            const lastCandle = candleOverride || this.candles[this.candles.length - 1];
             if (!lastCandle) {
-                console.log("[Trailing] No candles available to calculate trailing.");
                 return;
             }
 
@@ -713,17 +719,20 @@ console.log(result,'result---')
 
             const candles = response.data.sort((a: any, b: any) => a.time - b.time);
 
-            // 2. Fetch 1m sub-candles for accurate SL/TP simulation
+            // 2. Fetch 1m sub-candles for accurate SL/TP simulation (EXACTLY from start of today)
             let subCandles: Candle[] = [];
             if (resolution !== '1') {
                 const subRes = await CoinDCXApiService.getCandlesticks({
                     pair,
-                    from,
+                    from: Math.floor(startOfDay / 1000), 
                     to,
-                    resolution: '1'
+                    resolution: '1',
+                    limit: 2000 // Ensure we get the full day of data
                 });
+                console.log(`[Recovery] 📥 Loaded ${subRes.data.length} sub-candles for today (from 00:00).------------`);
                 if (subRes.s === 'ok' && Array.isArray(subRes.data)) {
                     subCandles = subRes.data.sort((a: any, b: any) => a.time - b.time);
+                    console.log(`[Recovery] 📥 Loaded ${subCandles.length} sub-candles for today (from 00:00).`);
                 }
             }
 
@@ -743,7 +752,6 @@ console.log(result,'result---')
                 atrMultiplierSL: 1.0, 
                 simulationStartUnix: Math.floor(startOfDay / 1000) 
             }, subCandles);
-
             // 5. Persist recovered trades
             if (result && result.trades) {
                 for (const t of result.trades) {
@@ -753,6 +761,13 @@ console.log(result,'result---')
                         console.log(`[Recovery] ⏭️ Skipping recovery for ${pair} at ${t.entryTime} (Real/Paper trade found)`);
                         continue;
                     }
+
+                    console.log(`[Recovery] 💾 Saving trade for ${pair} at ${t.entryTime}. Trails found: ${t.trailingHistory?.length || 0}`);
+                  
+                    if (t.trailingHistory && t.trailingHistory.length > 0) {
+                        console.log(`[Recovery] 🔍 First trail sample: SL=${t.trailingHistory[0].sl}, Market=${t.trailingHistory[0].marketPrice}`);
+                    }
+
 
                     await TradeHistoryService.saveTrade({
                         ...t,
@@ -779,6 +794,7 @@ console.log(result,'result---')
                         this.io.emit('settings-update', SettingsService.getSettings());
                     }
                 } else {
+                    console.log('here-----=====')
                     await TradeHistoryService.saveTrade({
                         ...active,
                         pair,

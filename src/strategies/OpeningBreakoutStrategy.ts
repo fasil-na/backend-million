@@ -141,7 +141,11 @@ console.log(type,'type-----')
                         const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
                         trade.fee = fee;
                         trade.profit = profit;
-                        allTrades.push(trade);
+                        
+                        // 📸 DEEP SNAPSHOT: Freeze the trade and its history array 
+                        // to prevent reference loss during simulation.
+                        allTrades.push(JSON.parse(JSON.stringify(trade)));
+                        
                         currentBalance += profit;
                         currentTrade = null;
                         break; // Exit the sub-candle loop
@@ -166,7 +170,11 @@ console.log(type,'type-----')
             }
         }
 
-        return { trades: allTrades, finalBalance: currentBalance, activeTrade: currentTrade };
+        return { 
+            trades: allTrades, 
+            finalBalance: currentBalance, 
+            activeTrade: currentTrade ? JSON.parse(JSON.stringify(currentTrade)) : null 
+        };
     }
 
     /**
@@ -181,17 +189,22 @@ console.log(type,'type-----')
                 const move = candle.high - lastHigh;
                 const newSl = (trade.sl || trade.entryPrice) + move;
                 
-                // If the new SL jumped above the current closing price (retrace), skip this update completely
-                // to prevent breaking the SL-to-High geometric distance and avoid exchange rejection.
-                if (newSl < currentPrice) {
+                // Only move SL if it's a significant change (> 0.01%) to prevent spam/desync
+                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
+                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
+
+                if (newSl < currentPrice && change > threshold) {
                     trade.sl = newSl;
                     trade.lastHigh = candle.high;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    console.log(trade.trailingCount,'hitting-------')
+                    // Force ensure history array exists
                     if (!trade.trailingHistory) trade.trailingHistory = [];
+                    
                     trade.trailingHistory.push({
-                        sl: newSl,
-                        marketPrice: currentPrice,
-                        time: dayjs().toISOString()
+                        sl: Number(newSl.toFixed(4)),
+                        marketPrice: Number(currentPrice.toFixed(4)),
+                        time: dayjs(candle.time).toISOString()
                     });
                 }
             }
@@ -201,16 +214,20 @@ console.log(type,'type-----')
                 const move = lastLow - candle.low;
                 const newSl = (trade.sl || trade.entryPrice) - move;
                 
-                // If new SL dropped below current closing price, skip update
-                if (newSl > currentPrice) {
+                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
+                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
+
+                if (newSl > currentPrice && change > threshold) {
                     trade.sl = newSl;
                     trade.lastLow = candle.low;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
+                    console.log(trade.trailingCount,'hitting-------123')
                     if (!trade.trailingHistory) trade.trailingHistory = [];
+                    
                     trade.trailingHistory.push({
-                        sl: newSl,
-                        marketPrice: currentPrice,
-                        time: dayjs().toISOString()
+                        sl: Number(newSl.toFixed(4)),
+                        marketPrice: Number(currentPrice.toFixed(4)),
+                        time: dayjs(candle.time).toISOString()
                     });
                 }
             }
@@ -281,7 +298,9 @@ console.log(type,'type-----')
             lastHigh: entry,
             lastLow: entry,
             units,
-            initialSL: sl
+            initialSL: sl,
+            trailingCount: 0,
+            trailingHistory: []
         };
     }
 
