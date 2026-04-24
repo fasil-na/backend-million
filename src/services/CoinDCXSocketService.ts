@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import crypto from 'crypto';
 import EventEmitter from 'events';
+import { SystemLogService } from './SystemLogService.js';
 
 export interface SocketConfig {
     apiKey: string;
@@ -28,7 +29,7 @@ export class CoinDCXSocketService extends EventEmitter {
         setInterval(() => {
             const diff = Date.now() - this.lastCandleTime;
             if (diff > 60000 && this.subscriptions.size > 0) {
-                console.error("🚨 No candle data detected for 60s! Reconnecting socket...");
+                SystemLogService.log('WARN', 'SOCKET', '🚨 No candle data for 60s. Forcing reconnection.');
                 this.disconnect();
                 this.connect();
             }
@@ -38,35 +39,35 @@ export class CoinDCXSocketService extends EventEmitter {
     public connect() {
         if (this.socket?.connected) return;
 
+        this.lastCandleTime = Date.now(); // 🛡️ RESET TIMER: Give the socket a fresh 60s to start receiving data
         console.log(`Connecting to CoinDCX Socket at ${this.endpoint}...`);
 
         this.socket = io(this.endpoint, {
-            transports: ['websocket'],
+            transports: ['websocket', 'polling'],
             reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
+            reconnectionAttempts: Infinity, // ♾️ NEVER GIVE UP: Keep trying until the internet returns
+            reconnectionDelay: 2000,
+            reconnectionDelayMax: 30000, // Gradually slow down to every 30s if the server is totally down
             timeout: 20000,
-            query: { EIO: '3' }
         });
 
         this.socket.removeAllListeners();
 
         this.socket.on('connect', () => {
-            console.log('Connected to CoinDCX Socket');
+            SystemLogService.log('INFO', 'SOCKET', '✅ Connected to CoinDCX');
             this.authenticate();
             this.resubscribe();
             this.emit('connected');
         });
 
         this.socket.on('disconnect', (reason) => {
-            console.log(`Disconnected from CoinDCX Socket: ${reason}`);
+            SystemLogService.log('WARN', 'SOCKET', `❌ Disconnected from CoinDCX`, { reason });
             this.authenticated = false;
             this.emit('disconnected', reason);
         });
 
         this.socket.on('connect_error', (error) => {
-            console.error('CoinDCX Socket Connection Error:', error.message);
+            SystemLogService.log('ERROR', 'SOCKET', `🔥 Connection Error: ${error.message}`);
             this.emit('socket_error', error);
         });
 

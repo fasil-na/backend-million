@@ -13,6 +13,8 @@ import { TradeHistoryService } from './TradeHistoryService.js';
 import { OpeningBreakoutStrategy } from '../strategies/OpeningBreakoutStrategy.js';
 import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 import { PriceStore } from './PriceStore.js';
+import { SystemLogService } from './SystemLogService.js';
+import mongoose from 'mongoose';
 
 export class SocketService {
     private static io: SocketIOServer;
@@ -63,8 +65,11 @@ export class SocketService {
             const s = SettingsService.getSettings();
             // ALWAYS subscribe to 1m for fast trailing SL updates
             const channel = this.formatChannel(s.pair, '1'); 
-            console.log(`Subscribing to 1m channel for fast trailing: ${channel}`);
+            console.log(`[Self-Healing] 🔄 Socket reconnected. Synchronizing state...`);
             coinDCXSocket.subscribe(channel);
+            
+            // 🛡️ RECOVERY SYNC: Fetch current exchange status to ensure no desync
+            this.syncExchangeState().catch(err => console.error('[Sync] ❌ Recovery Failed:', err.message));
         });
 
 
@@ -81,6 +86,44 @@ export class SocketService {
         const instrument = pair.includes('B-') ? pair : `B-${pair}`;
         return `${instrument}_${resolution}m-futures`;
     }
+
+    /**
+     * 🛡️ SELF-HEALING: Synchronizes the local bot state with the exchange reality.
+     * Prevents the bot from getting stuck in "Open" if a trade closed while server was away.
+     */
+    private static async syncExchangeState() {
+        try {
+            const settings = SettingsService.getSettings();
+            const pair = settings.pair;
+            const cleanS = (pair || '').replace('B-', '').toLowerCase();
+
+            console.log(`[Sync] 🔍 Checking exchange status for ${pair}...`);
+            
+            const positions = await TradeService.getPositions();
+            const livePos = Array.isArray(positions)
+                ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
+                : null;
+
+            if (livePos) {
+                SystemLogService.log('INFO', 'SYNC', `✅ Active position found: ${pair} @ ${livePos.entry_price}`);
+                this.currentPosition = livePos;
+                if (settings.activeTradeStatus !== 'open') {
+                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                    this.io.emit('settings-update', SettingsService.getSettings());
+                }
+            } else {
+                this.currentPosition = null;
+                if (settings.activeTradeStatus === 'open') {
+                    SystemLogService.log('WARN', 'SYNC', `🚑 Desync fixed: Exchange is FLAT, closing local status for ${pair}.`);
+                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+                    this.io.emit('settings-update', SettingsService.getSettings());
+                }
+            }
+        } catch (err: any) {
+            console.error('[Sync] Failed to synchronize state:', err.message);
+        }
+    }
+
     private static setupCoinDCXListeners() {
     coinDCXSocket.on('candlestick', async (data: Candle) => {
         const settings = SettingsService.getSettings();
@@ -545,8 +588,8 @@ coinDCXSocket.on('df-position-update', async (positions: any[]) => {
 console.log(result,'result---')
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
-                this.lastSignalTime = latestCandle.time; // 🔒 LOCK: Prevent duplicate entries for this candle
-                console.log(`[Strategy] 🎯 SIGNAL DETECTED: ${latest.direction} for ${pair}`);
+                this.lastSignalTime = latestCandle.time; 
+                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
                 this.io.emit('strategy-signal', { pair, trade: latest });
 
                 const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
@@ -703,6 +746,20 @@ console.log(result,'result---')
             const to = Math.floor(Date.now() / 1000);
 
             console.log(`[Recovery] 🔄 Recovering trade history for ${pair} with 7-Day warm-up...`);
+
+            // 🛡️ WAIT FOR DB: Ensure MongoDB is actually ready before we start hitting it
+            let retries = 0;
+            const mongoose = (await import('mongoose')).default;
+            while (mongoose.connection.readyState !== 1 && retries < 10) {
+                console.log(`[Recovery] ⏳ Waiting for MongoDB readiness (attempt ${retries + 1})...`);
+                await new Promise(res => setTimeout(res, 1000));
+                retries++;
+            }
+
+            if (mongoose.connection.readyState !== 1) {
+                console.error("[Recovery] ❌ MongoDB failed to connect in time. Skipping recovery.");
+                return;
+            }
 
             // 1. Fetch main candles
             const response = await CoinDCXApiService.getCandlesticks({

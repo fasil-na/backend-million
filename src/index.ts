@@ -9,6 +9,7 @@ import { SocketService } from './services/SocketService.js';
 import { SettingsService } from './services/SettingsService.js';
 import mongoose from 'mongoose';
 import { MONGODB_URI } from './config/constants.js';
+import { SystemLogService } from './services/SystemLogService.js';
 
 // Extend dayjs
 dayjs.extend(utc);
@@ -40,6 +41,9 @@ const start = async () => {
 
         // Start services
         SocketService.init(server);
+
+        // 🧪 TEST ERROR: Verify logging system works
+        await SystemLogService.log('ERROR', 'System', 'PROD_TEST: Log integration successful. Monitoring 24/7 active.');
 
         // 🔄 Sync State: Recover any trades that occurred while the server was offline
         SocketService.recoverTodayTrades();
