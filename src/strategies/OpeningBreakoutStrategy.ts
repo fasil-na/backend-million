@@ -79,13 +79,15 @@ console.log(type,'type-----')
 
             const ema20 = this.calculateEMA(closes, 20, i);
             const ema50 = this.calculateEMA(closes, 50, i);
-            if (Math.abs(ema20 - ema50) < 15) continue;
+            const spreadThreshold = c.close * 0.00025; // 0.025% of price
+            if (Math.abs(ema20 - ema50) < spreadThreshold) continue;
 
             const body = Math.abs(c.close - c.open);
             const range = c.high - c.low;
             if (range <= 0 || body / range <= 0.6) continue;
             if (c.volume <= this.avgVolume(candles, i) * 1.3) continue;
-            if (Math.abs(c.close - ema20) < 10) continue;
+            const proxThreshold = c.close * 0.00016; // 0.016% of price
+            if (Math.abs(c.close - ema20) < proxThreshold) continue;
 
             if (currentTrade) {
                 const trade = currentTrade; // Local refinement for TS
@@ -152,7 +154,7 @@ console.log(type,'type-----')
                     }
                 }
                 // -----
-                // continue;
+                continue;
             }
 
             if (!waiting) {
@@ -243,13 +245,15 @@ console.log(type,'type-----')
         const ema20 = this.calculateEMA(closes, 20, i);
         const ema50 = this.calculateEMA(closes, 50, i);
         
-        if (Math.abs(ema20 - ema50) < 15) return null;
+        const spreadThreshold = c.close * 0.00025; // 0.025% of price
+        if (Math.abs(ema20 - ema50) < spreadThreshold) return null;
 
         const body = Math.abs(c.close - c.open);
         const range = c.high - c.low;
         if (range <= 0 || body / range <= 0.6) return null;
         if (c.volume <= this.avgVolume(candles, i) * 1.3) return null;
-        if (Math.abs(c.close - ema20) < 10) return null;
+        const proxThreshold = c.close * 0.00016; // 0.016% of price
+        if (Math.abs(c.close - ema20) < proxThreshold) return null;
 
         if (c.high > rangeHigh && ema20 > ema50) return 'buy';
         if (c.low < rangeLow && ema20 < ema50) return 'sell';
