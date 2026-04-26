@@ -26,7 +26,7 @@ console.log(type,'type-----')
         const {
             feeRate = 0.0005,
             simulationStartUnix = 0,
-            atrMultiplierSL = 1.0
+            atrMultiplierSL = 1.5
         } = params;
 
 
@@ -90,70 +90,15 @@ console.log(type,'type-----')
             if (Math.abs(c.close - ema20) < proxThreshold) continue;
 
             if (currentTrade) {
-                const trade = currentTrade; // Local refinement for TS
-                const { trailingSL = true } = params;
-
-                // Sync subIdx to current candle start
-                while (subIdx < subCandles.length && subCandles[subIdx]!.time < c.time) {
-                    subIdx++;
+                const result = this.runTradeSimulation(currentTrade, candles, i, subCandles, subIdx, params, feeRate);
+                subIdx = result.subIdx;
+                
+                if (result.closed) {
+                    currentBalance += result.profit;
+                    // 📸 DEEP SNAPSHOT: Freeze the trade and its history array 
+                    allTrades.push(JSON.parse(JSON.stringify(currentTrade)));
+                    currentTrade = null;
                 }
-
-                // Get sub-candles for this period (e.g. the 15 1m candles inside this 15m candle)
-                const nextCandleTime = candles[i + 1] ? candles[i + 1]!.time : c.time + 3600000; // fallback 1h
-                const currentSubCandles: Candle[] = [];
-                while (subIdx < subCandles.length && subCandles[subIdx]!.time < nextCandleTime) {
-                    currentSubCandles.push(subCandles[subIdx]!);
-                    subIdx++;
-                }
-
-                // If no sub-candles, fallback to using the main candle itself
-                const simulationPass = currentSubCandles.length > 0 ? currentSubCandles : [c];
-
-                for (const sc of simulationPass) {
-                    const scTime = dayjs(sc.time).tz('Asia/Kolkata');
-
-                    if (trailingSL) {
-                        OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
-                        // 🎯 Round SL dynamically exactly like the Live execution does
-                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-                        trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
-                    }
-
-                    if (trade.direction === 'buy') {
-                        // Check SL on 1m Low (more realistic liquidation)
-                        if (trade.sl !== undefined && sc.low <= trade.sl) {
-                            trade.exitPrice = trade.sl;
-                            trade.exitReason = 'SL (1m)';
-                            trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
-                        }
-                    } else {
-                        // Check SL on 1m High
-                        if (trade.sl !== undefined && sc.high >= trade.sl) {
-                            trade.exitPrice = trade.sl;
-                            trade.exitReason = 'SL (1m)';
-                            trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
-                        }
-                    }
-
-                    if (trade.status === 'closed') {
-                        const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
-                        trade.fee = fee;
-                        trade.profit = profit;
-                        
-                        // 📸 DEEP SNAPSHOT: Freeze the trade and its history array 
-                        // to prevent reference loss during simulation.
-                        allTrades.push(JSON.parse(JSON.stringify(trade)));
-                        
-                        currentBalance += profit;
-                        currentTrade = null;
-                        break; // Exit the sub-candle loop
-                    }
-                }
-                // -----
                 continue;
             }
 
@@ -165,10 +110,25 @@ console.log(type,'type-----')
                     lastBreakoutTime = time.toISOString();
                 }
             } else {
-                currentTrade = this.calculateEntryParams(c, direction!, candles, i, currentBalance, params);
+                // 🚀 ENTRY PARITY: Enter at the close of the matching candle (i-1) 
+                // which is equivalent to the opening of the current candle (i).
+                currentTrade = this.calculateEntryParams(candles[i-1], direction!, candles, i - 1, currentBalance, params);
+                currentTrade.entryTime = dayjs(c.time).tz('Asia/Kolkata').toISOString();
+                
                 waiting = false;
                 rangeHigh = null;
                 rangeLow = null;
+
+                // 🛑 IMMEDIATE SL CHECK: Ensure there is no blind spot if the entry candle itself hits SL
+                if (currentTrade) {
+                    const result = this.runTradeSimulation(currentTrade, candles, i, subCandles, subIdx, params, feeRate);
+                    subIdx = result.subIdx;
+                    if (result.closed) {
+                        currentBalance += result.profit;
+                        allTrades.push(JSON.parse(JSON.stringify(currentTrade)));
+                        currentTrade = null;
+                    }
+                }
             }
         }
 
@@ -262,7 +222,7 @@ console.log(type,'type-----')
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
+        const { atrMultiplierSL =1.5, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = Math.abs(this.calculateATR(candles, 14, i));
         const multiplier = Math.abs(atrMultiplierSL);
@@ -306,6 +266,76 @@ console.log(type,'type-----')
             trailingCount: 0,
             trailingHistory: []
         };
+    }
+
+    private runTradeSimulation(
+        trade: Trade,
+        candles: Candle[],
+        i: number,
+        subCandles: Candle[],
+        subIdx: number,
+        params: Record<string, any>,
+        feeRate: number
+    ): { closed: boolean, profit: number, subIdx: number } {
+        const c = candles[i];
+        const { trailingSL = true } = params;
+        let currentSubIdx = subIdx;
+
+        // Sync subIdx to current candle start
+        while (currentSubIdx < subCandles.length && subCandles[currentSubIdx]!.time < c.time) {
+            currentSubIdx++;
+        }
+
+        // Get sub-candles for this period (e.g. the 15 1m candles inside this 15m candle)
+        const nextCandleTime = candles[i + 1] ? candles[i + 1]!.time : c.time + 3600000; // fallback 1h
+        const currentSubCandles: Candle[] = [];
+        while (currentSubIdx < subCandles.length && subCandles[currentSubIdx]!.time < nextCandleTime) {
+            currentSubCandles.push(subCandles[currentSubIdx]!);
+            currentSubIdx++;
+        }
+
+        // If no sub-candles, fallback to using the main candle itself
+        const simulationPass = currentSubCandles.length > 0 ? currentSubCandles : [c];
+
+        for (const sc of simulationPass) {
+            const scTime = dayjs(sc.time).tz('Asia/Kolkata');
+
+            if (trailingSL) {
+                OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
+                // 🎯 Round SL dynamically exactly like the Live execution does
+                const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
+                const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
+                const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
+            }
+
+            if (trade.direction === 'buy') {
+                // Check SL on 1m Low (more realistic liquidation)
+                if (trade.sl !== undefined && sc.low <= trade.sl) {
+                    trade.exitPrice = trade.sl;
+                    trade.exitReason = 'SL (1m)';
+                    trade.status = 'closed';
+                    trade.exitTime = scTime.toISOString();
+                }
+            } else {
+                // Check SL on 1m High
+                if (trade.sl !== undefined && sc.high >= trade.sl) {
+                    trade.exitPrice = trade.sl;
+                    trade.exitReason = 'SL (1m)';
+                    trade.status = 'closed';
+                    trade.exitTime = scTime.toISOString();
+                }
+            }
+
+            if (trade.status === 'closed') {
+                const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
+                trade.fee = fee;
+                trade.profit = profit;
+                return { closed: true, profit, subIdx: currentSubIdx };
+            }
+        }
+
+        return { closed: false, profit: 0, subIdx: currentSubIdx };
     }
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
