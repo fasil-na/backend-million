@@ -26,33 +26,38 @@ export class StrategyController {
             let currentCapital = req.body.capital || req.body.capitalPerTrade || 1000;
             const initialCapital = currentCapital;
             let allTrades: Trade[] = [];
-            let periods: { year: number, month: number }[] = [];
+            let periods: { start: dayjs.Dayjs, end: dayjs.Dayjs }[] = [];
 
             if (isLive) {
                 const todayStart = dayjs().tz('Asia/Kolkata').startOf('day');
-                periods.push({ year: todayStart.year(), month: todayStart.month() });
+                periods.push({ start: todayStart, end: dayjs() });
+            } else if (req.body.startDate && req.body.endDate) {
+                let start = dayjs(req.body.startDate).startOf('day');
+                let finalEnd = dayjs(req.body.endDate).endOf('day');
+                
+                let current = start;
+                while (current.isBefore(finalEnd)) {
+                    let nextMonth = current.add(1, 'month').startOf('month');
+                    let periodEnd = nextMonth.isAfter(finalEnd) ? finalEnd : nextMonth.subtract(1, 'second');
+                    periods.push({ start: current, end: periodEnd });
+                    current = nextMonth;
+                }
             } else if (startYear !== undefined && startMonth !== undefined && endYear !== undefined && endMonth !== undefined) {
                 let current = dayjs().year(startYear).month(startMonth).startOf('month');
                 const end = dayjs().year(endYear).month(endMonth).endOf('month');
                 while (current.isBefore(end)) {
-                    periods.push({ year: current.year(), month: current.month() });
+                    periods.push({ start: current.startOf('month'), end: current.endOf('month') });
                     current = current.add(1, 'month');
                 }
             } else if (year !== undefined && month !== undefined) {
-                periods.push({ year, month });
+                const start = dayjs().year(year).month(month).startOf('month');
+                periods.push({ start, end: start.endOf('month') });
             }
 
             for (const period of periods) {
-                const monthStart = dayjs().year(period.year).month(period.month).startOf('month');
-                const monthEnd = dayjs().year(period.year).month(period.month).endOf('month');
-
-                let simStart = Math.floor(monthStart.valueOf() / 1000);
-                // 🛑 MATHEMATICAL PARITY FIX: EMA fundamentally requires 500 candles to physically "warm up" (lines 305 of your strategy).
-                // But the Backtester historically only fetched 24hrs (max 96 candles at 15m) before the simulation started.
-                // We MUST mathematically fetch 7 entire Days (672 candles) of blind history so the OpeningBreakoutStrategy backtest array 
-                // structurally feeds perfectly identical recursive exponential inputs exactly matching the Live 1000-candle buffer!
+                let simStart = Math.floor(period.start.valueOf() / 1000);
+                let end = Math.floor(period.end.valueOf() / 1000);
                 let fetchStart = simStart - (7 * 24 * 60 * 60); 
-                let end = Math.floor(monthEnd.valueOf() / 1000);
 
                 if (isLive) {
                     simStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);

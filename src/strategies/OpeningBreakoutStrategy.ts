@@ -15,11 +15,12 @@ export class OpeningBreakoutStrategy implements Strategy {
     description = 'Trades based on the high/low of an opening time window with EMA and ATR filters.';
     run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): { trades: Trade[], finalBalance: number, activeTrade?: Trade | null } | { matched: boolean } {
         const { type = 'backtest', capital = 1000 } = params;
-console.log(type,'type-----')
         if (type === 'live') {
             const result = this.checkSignal(candles, params);
             return result;
         }
+
+        console.log(`[Backtest] 🚀 Starting simulation: ${candles.length} candles, Initial Capital: ${capital}`);
 
         if (candles.length < 10) return { trades: [], finalBalance: capital };
 
@@ -37,23 +38,22 @@ console.log(type,'type-----')
         let currentTrade: Trade | null = null;
         let rangeHigh: number | null = null;
         let rangeLow: number | null = null;
-        let waiting = false;
         let direction: 'buy' | 'sell' | null = null;
         let lastBreakoutTime: string | null = null;
         let subIdx = 0;
         let lastDay: string | null = null;
         let dayCandleCount = 0;
-        const openingWindow = 20; 
+        const openingWindow = 20;
 
         for (let i = 0; i < candles.length; i++) {
             const c = candles[i];
-              if (currentBalance <= 0) {
+            if (currentBalance <= 0) {
                 console.log("BANKRUPTCY: Balance hit 0, stopping strategy.");
                 break;
             }
 
             if (!c) continue;
-            
+
             const time = dayjs(c.time).tz('Asia/Kolkata');
             const currentDay = time.format('YYYY-MM-DD');
 
@@ -67,10 +67,14 @@ console.log(type,'type-----')
 
             dayCandleCount++;
 
-            // Define the opening range during the first 50 candles of the day
+            // Define the opening range during the first 20 candles of the day (openingWindow)
             if (dayCandleCount <= openingWindow) {
                 if (rangeHigh === null || c.high > rangeHigh) rangeHigh = c.high;
                 if (rangeLow === null || c.low < rangeLow) rangeLow = c.low;
+                
+                if (dayCandleCount === openingWindow) {
+                    console.log(`[Backtest] 🌅 Opening Range Finalized for ${currentDay}: High=${rangeHigh}, Low=${rangeLow}`);
+                }
                 continue; // Cannot trade during the opening window
             }
 
@@ -111,17 +115,24 @@ console.log(type,'type-----')
                     const scTime = dayjs(sc.time).tz('Asia/Kolkata');
 
                     if (trailingSL) {
+                        const oldSL = trade.sl;
                         OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
+                        
                         // 🎯 Round SL dynamically exactly like the Live execution does
                         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
                         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
                         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
                         trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
+
+                        if (trade.sl !== oldSL) {
+                            console.log(`[Backtest] 📈 Trailing SL Updated: ${oldSL} -> ${trade.sl} at ${scTime.format('HH:mm:ss')} (Price: ${sc.close})`);
+                        }
                     }
 
                     if (trade.direction === 'buy') {
                         // Check SL on 1m Low (more realistic liquidation)
                         if (trade.sl !== undefined && sc.low <= trade.sl) {
+                            console.log(`[Backtest] 🛑 SL Hit (Buy): Low=${sc.low} <= SL=${trade.sl} at ${scTime.format('HH:mm:ss')}`);
                             trade.exitPrice = trade.sl;
                             trade.exitReason = 'SL (1m)';
                             trade.status = 'closed';
@@ -130,6 +141,7 @@ console.log(type,'type-----')
                     } else {
                         // Check SL on 1m High
                         if (trade.sl !== undefined && sc.high >= trade.sl) {
+                            console.log(`[Backtest] 🛑 SL Hit (Sell): High=${sc.high} >= SL=${trade.sl} at ${scTime.format('HH:mm:ss')}`);
                             trade.exitPrice = trade.sl;
                             trade.exitReason = 'SL (1m)';
                             trade.status = 'closed';
@@ -141,11 +153,13 @@ console.log(type,'type-----')
                         const { profit, fee } = calculateTradeProfit(trade, trade.exitPrice!, feeRate);
                         trade.fee = fee;
                         trade.profit = profit;
-                        
+
+                        console.log(`[Backtest] 💰 Trade Closed: ${trade.direction.toUpperCase()} Exit=${trade.exitPrice}, Profit=${profit.toFixed(2)}, New Balance=${(currentBalance + profit).toFixed(2)}`);
+
                         // 📸 DEEP SNAPSHOT: Freeze the trade and its history array 
                         // to prevent reference loss during simulation.
                         allTrades.push(JSON.parse(JSON.stringify(trade)));
-                        
+
                         currentBalance += profit;
                         currentTrade = null;
                         break; // Exit the sub-candle loop
@@ -155,25 +169,24 @@ console.log(type,'type-----')
                 // continue;
             }
 
-            if (!waiting) {
+            if (!currentTrade) {
                 const signal = this.getSignal(candles, i, rangeHigh, rangeLow);
                 if (signal) {
+                    console.log(`[Backtest] 🎯 Signal Triggered: ${signal.toUpperCase()} at ${time.format('HH:mm:ss')} (Price: ${c.close})`);
                     direction = signal;
-                    waiting = true;
                     lastBreakoutTime = time.toISOString();
+                    currentTrade = this.calculateEntryParams(c, direction, candles, i, currentBalance, params);
+                    console.log(`[Backtest] 🚀 Trade Entered: ${direction.toUpperCase()} Entry=${currentTrade.entryPrice}, SL=${currentTrade.sl}, Units=${currentTrade.units?.toFixed(4)}`);
+                    rangeHigh = null;
+                    rangeLow = null;
                 }
-            } else {
-                currentTrade = this.calculateEntryParams(c, direction!, candles, i, currentBalance, params);
-                waiting = false;
-                rangeHigh = null;
-                rangeLow = null;
             }
         }
 
-        return { 
-            trades: allTrades, 
-            finalBalance: currentBalance, 
-            activeTrade: currentTrade ? JSON.parse(JSON.stringify(currentTrade)) : null 
+        return {
+            trades: allTrades,
+            finalBalance: currentBalance,
+            activeTrade: currentTrade ? JSON.parse(JSON.stringify(currentTrade)) : null
         };
     }
 
@@ -182,13 +195,13 @@ console.log(type,'type-----')
      */
     public static updateTrailingSL(trade: Trade, candle: Candle): void {
         const currentPrice = candle.close;
-        
+
         if (trade.direction === 'buy') {
             const lastHigh = trade.lastHigh ?? trade.entryPrice;
             if (candle.high > lastHigh) {
                 const move = candle.high - lastHigh;
                 const newSl = (trade.sl || trade.entryPrice) + move;
-                
+
                 // Only move SL if it's a significant change (> 0.01%) to prevent spam/desync
                 const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
                 const threshold = (trade.sl || trade.entryPrice) * 0.0001;
@@ -197,10 +210,9 @@ console.log(type,'type-----')
                     trade.sl = newSl;
                     trade.lastHigh = candle.high;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
-                    console.log(trade.trailingCount,'hitting-------')
                     // Force ensure history array exists
                     if (!trade.trailingHistory) trade.trailingHistory = [];
-                    
+
                     trade.trailingHistory.push({
                         sl: Number(newSl.toFixed(4)),
                         marketPrice: Number(currentPrice.toFixed(4)),
@@ -213,7 +225,7 @@ console.log(type,'type-----')
             if (candle.low < lastLow) {
                 const move = lastLow - candle.low;
                 const newSl = (trade.sl || trade.entryPrice) - move;
-                
+
                 const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
                 const threshold = (trade.sl || trade.entryPrice) * 0.0001;
 
@@ -221,9 +233,9 @@ console.log(type,'type-----')
                     trade.sl = newSl;
                     trade.lastLow = candle.low;
                     trade.trailingCount = (trade.trailingCount || 0) + 1;
-                    console.log(trade.trailingCount,'hitting-------123')
+                    console.log(trade.trailingCount, 'hitting-------123')
                     if (!trade.trailingHistory) trade.trailingHistory = [];
-                    
+
                     trade.trailingHistory.push({
                         sl: Number(newSl.toFixed(4)),
                         marketPrice: Number(currentPrice.toFixed(4)),
@@ -242,7 +254,7 @@ console.log(type,'type-----')
         const closes = candles.map(candle => candle.close);
         const ema20 = this.calculateEMA(closes, 20, i);
         const ema50 = this.calculateEMA(closes, 50, i);
-        
+
         if (Math.abs(ema20 - ema50) < 15) return null;
 
         const body = Math.abs(c.close - c.open);
@@ -251,19 +263,25 @@ console.log(type,'type-----')
         if (c.volume <= this.avgVolume(candles, i) * 1.3) return null;
         if (Math.abs(c.close - ema20) < 10) return null;
 
-        if (c.high > rangeHigh && ema20 > ema50) return 'buy';
-        if (c.low < rangeLow && ema20 < ema50) return 'sell';
+        if (c.high > rangeHigh && ema20 > ema50) {
+            console.log(`[Backtest] ✅ Buy Signal Confirmed: Price(${c.high}) > RangeHigh(${rangeHigh}) and EMA20(${ema20.toFixed(2)}) > EMA50(${ema50.toFixed(2)})`);
+            return 'buy';
+        }
+        if (c.low < rangeLow && ema20 < ema50) {
+            console.log(`[Backtest] ✅ Sell Signal Confirmed: Price(${c.low}) < RangeLow(${rangeLow}) and EMA20(${ema20.toFixed(2)}) < EMA50(${ema50.toFixed(2)})`);
+            return 'sell';
+        }
 
         return null;
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL =0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
+        const { atrMultiplierSL = 0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = Math.abs(this.calculateATR(candles, 14, i));
         const multiplier = Math.abs(atrMultiplierSL);
         const offset = atr * multiplier;
-        
+
         let sl = direction === 'buy' ? entry - offset : entry + offset;
 
         // 🛑 CRITICAL SANITY GUARD: Ensure SL is on the correct side of Entry
@@ -306,7 +324,7 @@ console.log(type,'type-----')
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
         if (candles.length < 10) return { matched: false };
-        
+
         // 🛡️ One-and-Done Lockout: If the database reports we already traded today, do not evaluate!
         if (params.hasTradedToday) {
             return { matched: false };
@@ -315,7 +333,7 @@ console.log(type,'type-----')
         // because length - 1 is the brand new forming candle when this is triggered.
         const i = candles.length - 2;
         if (i < 0) return { matched: false };
-        
+
         const c = candles[i];
         if (!c) return { matched: false };
 
