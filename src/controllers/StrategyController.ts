@@ -1,5 +1,10 @@
 import { type Request, type Response } from 'express';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 import { strategies } from '../strategies/index.js';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import type { Candle, Trade } from '../types/index.js';
@@ -19,7 +24,7 @@ export class StrategyController {
             console.log('calling bactest route---')
             const {
                 isLive, from, to, month, year, startYear, startMonth, endYear, endMonth,
-                pair = "B-BTC_USDT", resolution = "5"
+                pair = "B-BTC_USDT", resolution = "5", timezone = "UTC"
             } = req.body;
 
             let leverage = req.body.leverage || await CoinDCXApiService.getInstrumentLeverage(pair);
@@ -29,12 +34,12 @@ export class StrategyController {
             let periods: { start: dayjs.Dayjs, end: dayjs.Dayjs }[] = [];
 
             if (isLive) {
-                const todayStart = dayjs().tz('Asia/Kolkata').startOf('day');
-                periods.push({ start: todayStart, end: dayjs() });
+                const todayStart = timezone === 'IST' ? dayjs().tz('Asia/Kolkata').startOf('day') : dayjs().utc().startOf('day');
+                periods.push({ start: todayStart, end: timezone === 'IST' ? dayjs().tz('Asia/Kolkata') : dayjs().utc() });
             } else if (req.body.startDate && req.body.endDate) {
-                let start = dayjs(req.body.startDate).startOf('day');
-                let finalEnd = dayjs(req.body.endDate).endOf('day');
-                
+                let start = timezone === 'IST' ? dayjs.tz(req.body.startDate, 'Asia/Kolkata').startOf('day') : dayjs.utc(req.body.startDate).startOf('day');
+                let finalEnd = timezone === 'IST' ? dayjs.tz(req.body.endDate, 'Asia/Kolkata').endOf('day') : dayjs.utc(req.body.endDate).endOf('day');
+
                 let current = start;
                 while (current.isBefore(finalEnd)) {
                     let nextMonth = current.add(1, 'month').startOf('month');
@@ -57,10 +62,13 @@ export class StrategyController {
             for (const period of periods) {
                 let simStart = Math.floor(period.start.valueOf() / 1000);
                 let end = Math.floor(period.end.valueOf() / 1000);
-                let fetchStart = simStart - (7 * 24 * 60 * 60); 
+                let fetchStart = simStart - (7 * 24 * 60 * 60);
+
+                console.log(`[Controller] 📅 Backtest Period: ${period.start.format('YYYY-MM-DD HH:mm:ss Z')} to ${period.end.format('YYYY-MM-DD HH:mm:ss Z')}`);
+                console.log(`[Controller] 🕒 simStart: ${simStart} (${dayjs.unix(simStart).utc().format('YYYY-MM-DD HH:mm:ss')} UTC)`);
 
                 if (isLive) {
-                    simStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);
+                    simStart = Math.floor((timezone === 'IST' ? dayjs().tz('Asia/Kolkata').startOf('day') : dayjs().utc().startOf('day')).valueOf() / 1000);
                     fetchStart = simStart - (7 * 24 * 60 * 60);
                     end = Math.floor(Date.now() / 1000);
                 }
@@ -78,23 +86,23 @@ export class StrategyController {
                         const strategy = strategies[req.body.strategyId || 'opening-breakout'] as any;
                         if (strategy) {
                             const result = strategy.run(candles, {
-                                ...req.body, 
-                                leverage, 
-                                atrMultiplierSL: 1.0, 
-                                capital: currentCapital, 
-                                simulationStartUnix: simStart, 
+                                ...req.body,
+                                leverage,
+                                atrMultiplierSL: 1,
+                                capital: currentCapital,
+                                simulationStartUnix: simStart,
                                 type: 'backtest'
                             }, subCandles);
-                            
+
                             if ('trades' in result) {
                                 allTrades.push(...result.trades);
-                                
+
                                 // Show currently open simulated trades in the UI so users 
                                 // don't think recent signals were missed if they haven't closed yet.
                                 // if (result.activeTrade) {
                                 //     allTrades.push(result.activeTrade);
                                 // }
-                                
+
                                 currentCapital = result.finalBalance;
                                 if (currentCapital <= 0) break;
                             }

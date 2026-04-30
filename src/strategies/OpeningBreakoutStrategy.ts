@@ -1,13 +1,16 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
 import type { Candle, Trade } from '../types/index.js';
 import type { Strategy } from './index.js';
 import { calculateUnits, calculateTradeProfit } from './StrategyUtils.js';
 import { TradeService } from '../services/TradeService.js';
 
-dayjs.extend(utc);
-dayjs.extend(timezone);
+
 
 export class OpeningBreakoutStrategy implements Strategy {
     id = 'opening-breakout';
@@ -21,6 +24,7 @@ export class OpeningBreakoutStrategy implements Strategy {
         }
 
         console.log(`[Backtest] 🚀 Starting simulation: ${candles.length} candles, Initial Capital: ${capital}`);
+        console.log(`[Backtest] 🕒 Params - simulationStartUnix: ${params.simulationStartUnix} (${params.simulationStartUnix ? dayjs.unix(params.simulationStartUnix).utc().format('YYYY-MM-DD HH:mm:ss') : 'N/A'})`);
 
         if (candles.length < 10) return { trades: [], finalBalance: capital };
 
@@ -54,7 +58,8 @@ export class OpeningBreakoutStrategy implements Strategy {
 
             if (!c) continue;
 
-            const time = dayjs(c.time).tz('Asia/Kolkata');
+            const tz = params.timezone === 'IST' ? 'Asia/Kolkata' : 'UTC';
+            const time = tz === 'UTC' ? dayjs(c.time).utc() : dayjs(c.time).tz(tz);
             const currentDay = time.format('YYYY-MM-DD');
 
             // Reset range at the start of a new day
@@ -71,25 +76,12 @@ export class OpeningBreakoutStrategy implements Strategy {
             if (dayCandleCount <= openingWindow) {
                 if (rangeHigh === null || c.high > rangeHigh) rangeHigh = c.high;
                 if (rangeLow === null || c.low < rangeLow) rangeLow = c.low;
-                
+
                 if (dayCandleCount === openingWindow) {
                     console.log(`[Backtest] 🌅 Opening Range Finalized for ${currentDay}: High=${rangeHigh}, Low=${rangeLow}`);
                 }
                 continue; // Cannot trade during the opening window
             }
-
-            if (!rangeHigh || !rangeLow) continue;
-            if (simulationStartUnix && c.time < simulationStartUnix * 1000) continue;
-
-            const ema20 = this.calculateEMA(closes, 20, i);
-            const ema50 = this.calculateEMA(closes, 50, i);
-            if (Math.abs(ema20 - ema50) < 15) continue;
-
-            const body = Math.abs(c.close - c.open);
-            const range = c.high - c.low;
-            if (range <= 0 || body / range <= 0.6) continue;
-            if (c.volume <= this.avgVolume(candles, i) * 1.3) continue;
-            if (Math.abs(c.close - ema20) < 10) continue;
 
             if (currentTrade) {
                 const trade = currentTrade; // Local refinement for TS
@@ -112,12 +104,13 @@ export class OpeningBreakoutStrategy implements Strategy {
                 const simulationPass = currentSubCandles.length > 0 ? currentSubCandles : [c];
 
                 for (const sc of simulationPass) {
-                    const scTime = dayjs(sc.time).tz('Asia/Kolkata');
+                    const tz = params.timezone === 'IST' ? 'Asia/Kolkata' : 'UTC';
+                    const scTime = tz === 'UTC' ? dayjs(sc.time).utc() : dayjs(sc.time).tz(tz);
 
                     if (trailingSL) {
                         const oldSL = trade.sl;
                         OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
-                        
+
                         // 🎯 Round SL dynamically exactly like the Live execution does
                         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
                         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
@@ -156,7 +149,7 @@ export class OpeningBreakoutStrategy implements Strategy {
 
                         console.log(`[Backtest] 💰 Trade Closed: ${trade.direction.toUpperCase()} Exit=${trade.exitPrice}, Profit=${profit.toFixed(2)}, New Balance=${(currentBalance + profit).toFixed(2)}`);
 
-                        // 📸 DEEP SNAPSHOT: Freeze the trade and its history array 
+                        // 📸 DEEP SNAPSHOT: Freeze the trade and its history array
                         // to prevent reference loss during simulation.
                         allTrades.push(JSON.parse(JSON.stringify(trade)));
 
@@ -165,9 +158,21 @@ export class OpeningBreakoutStrategy implements Strategy {
                         break; // Exit the sub-candle loop
                     }
                 }
-                // -----
-                // continue;
+                continue; // Move to next candle since we already have an active trade
             }
+
+            if (!rangeHigh || !rangeLow) continue;
+            if (simulationStartUnix && c.time < simulationStartUnix * 1000) continue;
+
+            const ema20 = this.calculateEMA(closes, 20, i);
+            const ema50 = this.calculateEMA(closes, 50, i);
+            if (Math.abs(ema20 - ema50) < 15) continue;
+
+            const body = Math.abs(c.close - c.open);
+            const range = c.high - c.low;
+            if (range <= 0 || body / range <= 0.6) continue;
+            if (c.volume <= this.avgVolume(candles, i) * 1.3) continue;
+            if (Math.abs(c.close - ema20) < 10) continue;
 
             if (!currentTrade) {
                 const signal = this.getSignal(candles, i, rangeHigh, rangeLow);
@@ -255,7 +260,7 @@ export class OpeningBreakoutStrategy implements Strategy {
         const ema20 = this.calculateEMA(closes, 20, i);
         const ema50 = this.calculateEMA(closes, 50, i);
 
-        if (Math.abs(ema20 - ema50) < 15) return null;
+        if (Math.abs(ema20 - ema50) < 5) return null;
 
         const body = Math.abs(c.close - c.open);
         const range = c.high - c.low;
@@ -276,7 +281,7 @@ export class OpeningBreakoutStrategy implements Strategy {
     }
 
     private calculateEntryParams(c: Candle, direction: 'buy' | 'sell', candles: Candle[], i: number, balance: number, params: Record<string, any>): Trade {
-        const { atrMultiplierSL = 0.8, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
+        const { atrMultiplierSL = 1, maxPositionSize = 100, feeRate = 0.0005, leverage = 1 } = params;
         const entry = c.close;
         const atr = Math.abs(this.calculateATR(candles, 14, i));
         const multiplier = Math.abs(atrMultiplierSL);
@@ -307,7 +312,7 @@ export class OpeningBreakoutStrategy implements Strategy {
         });
 
         return {
-            entryTime: dayjs(c.time).tz('Asia/Kolkata').toISOString(),
+            entryTime: (params.timezone === 'IST' ? dayjs(c.time).tz('Asia/Kolkata') : dayjs(c.time).utc()).toISOString(),
             direction,
             entryPrice: entry,
             sl,
@@ -339,13 +344,14 @@ export class OpeningBreakoutStrategy implements Strategy {
 
         let rangeHigh: number | null = null;
         let rangeLow: number | null = null;
-        const time = dayjs(c.time).tz('Asia/Kolkata');
+        const tz = params.timezone === 'IST' ? 'Asia/Kolkata' : 'UTC';
+        const time = tz === 'UTC' ? dayjs(c.time).utc() : dayjs(c.time).tz(tz);
         const currentDay = time.format('YYYY-MM-DD');
         const openingWindow = 20; // 🛑 CRITICAL FIX: Synchronize with the identical 20-candle range window defined in backtester `run()`
 
         let dayCandleCount = 0;
         for (const candle of candles) {
-            const candleTime = dayjs(candle.time).tz('Asia/Kolkata');
+            const candleTime = tz === 'UTC' ? dayjs(candle.time).utc() : dayjs(candle.time).tz(tz);
             if (candleTime.format('YYYY-MM-DD') === currentDay) {
                 dayCandleCount++;
                 if (dayCandleCount <= openingWindow) {
