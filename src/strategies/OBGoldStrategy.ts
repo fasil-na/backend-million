@@ -86,8 +86,8 @@ export class GoldOpeningBreakout implements Strategy {
 
                 const currentSubs: Candle[] = [];
 
-                while (subIdx < subCandles.length && subCandles[subIdx].time < nextTime) {
-                    currentSubs.push(subCandles[subIdx]);
+                while (subIdx < subCandles.length && subCandles[subIdx]!.time < nextTime) {
+                    currentSubs.push(subCandles[subIdx]!);
                     subIdx++;
                 }
 

@@ -4,6 +4,7 @@ import marketRoutes from './marketRoutes.js';
 import tradeHistoryRoutes from './tradeHistoryRoutes.js';
 import settingsRoutes from './settingsRoutes.js';
 import systemLogRoutes from './systemLogRoutes.js';
+import strategyRoutes from './strategyRoutes.js';
 
 const router = Router();
 
@@ -13,6 +14,7 @@ router.use('/market', marketRoutes);
 router.use('/trade-history', tradeHistoryRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/system-logs', systemLogRoutes);
+router.use('/strategy', strategyRoutes);
 
 // --- Health Check (Enhanced) ---
 router.get('/health', async (req, res) => {

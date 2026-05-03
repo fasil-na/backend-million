@@ -27,19 +27,23 @@ export function calculateTradeProfit(
     trade: Trade,
     exitPrice: number,
     feeRate: number
-): { profit: number; fee: number } {
-    const units = trade.units || 0;
-    const entryVal = trade.entryPrice * units;
-    const exitVal = exitPrice * units;
+) {
+    // ✅ Key fix — convert lots to oz
+    const units = (trade.units || 0) * 100;  // 0.01 × 100 = 1 oz
 
     const grossProfit = trade.direction === 'buy'
         ? (exitPrice - trade.entryPrice) * units
         : (trade.entryPrice - exitPrice) * units;
 
+    const entryVal = trade.entryPrice * units;
+    const exitVal = exitPrice * units;
     const fee = (entryVal + exitVal) * feeRate;
+
     return {
-        profit: grossProfit - fee,
-        fee
+        profit: parseFloat((grossProfit - fee).toFixed(2)),
+        fee: parseFloat(fee.toFixed(2)),
+        grossProfit: parseFloat(grossProfit.toFixed(2)),
+        points: parseFloat((exitPrice - trade.entryPrice).toFixed(2))
     };
 }
 

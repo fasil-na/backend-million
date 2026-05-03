@@ -15,10 +15,19 @@ export class MarketController {
             const now = Math.floor(Date.now() / 1000);
             const yesterday = now - (24 * 60 * 60);
 
+            let fromNum = Number(from || yesterday);
+            let toNum = Number(to || now);
+
+            if (fromNum > toNum) {
+                const temp = fromNum;
+                fromNum = toNum;
+                toNum = temp;
+            }
+
             const data = await CoinDCXApiService.getCandlesticks({
                 pair,
-                from: Number(from || yesterday),
-                to: Number(to || now),
+                from: fromNum,
+                to: toNum,
                 resolution: String(resolution)
             });
 

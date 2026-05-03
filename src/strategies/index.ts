@@ -10,9 +10,13 @@ export interface Strategy {
 import { OpeningBreakoutStrategy } from './OpeningBreakoutStrategy.js';
 import { EmaCrossoverStrategy } from './EmaCrossoverStrategy.js';
 import { GoldOpeningBreakout } from './OBGoldStrategy.js';
+import { TpGoldOpeningBreakout } from './OBGoldStrategyTP.js';
+
 
 export const strategies: Record<string, Strategy> = {
-    'opening-breakout': new OpeningBreakoutStrategy(),
-    'ema-crossover': new EmaCrossoverStrategy(),
-    'gold-opening-breakout': new GoldOpeningBreakout(),
+    // 'opening-breakout': new OpeningBreakoutStrategy(),
+    // 'ema-crossover': new EmaCrossoverStrategy(),
+    'tp-gold-opening-breakout': new TpGoldOpeningBreakout(),
+    'gold-opening-breakout': new GoldOpeningBreakout()
+
 };
