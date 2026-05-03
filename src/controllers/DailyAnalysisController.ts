@@ -20,8 +20,8 @@ export class DailyAnalysisController {
             const simStart = Math.floor(targetDay.startOf('day').valueOf() / 1000);
             const simEnd = Math.floor(targetDay.endOf('day').valueOf() / 1000);
             
-            // Only fetch from the start of the day. The 15 candles before 3:45 AM act as natural warmup for the 14-period ATR.
-            const fetchStart = simStart;
+            // Fetch 7 days of warmup data so EMA 200 and other indicators have enough history
+            const fetchStart = simStart - (7 * 24 * 60 * 60);
 
             const [resMain, resSub] = await Promise.all([
                 CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: simEnd, resolution: '15' }),
@@ -89,6 +89,7 @@ export class DailyAnalysisController {
                 if ('trades' in result) {
                     trades = result.trades;
                     dailyPnl = trades.reduce((sum, t) => sum + t.profit, 0);
+                    (res as any).indicators = (result as any).indicators || {};
                 }
             }
 
@@ -99,7 +100,8 @@ export class DailyAnalysisController {
                 rangeTime,
                 tradesCount: trades.length,
                 trades,
-                dailyPnl
+                dailyPnl,
+                indicators: (res as any).indicators || {}
             });
 
         } catch (error: any) {

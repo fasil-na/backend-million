@@ -4,7 +4,12 @@ export interface Strategy {
     id: string;
     name: string;
     description: string;
-    run(candles: Candle[], params: Record<string, any>, subCandles?: Candle[]): { trades: Trade[], finalBalance: number, activeTrade?: Trade | null } | { matched: boolean, trade?: Trade };
+    run(candles: Candle[], params: Record<string, any>, subCandles?: Candle[]): { 
+        trades: Trade[], 
+        finalBalance: number, 
+        activeTrade?: Trade | null,
+        indicators?: Record<string, any[]>
+    } | { matched: boolean, trade?: Trade };
 }
 
 import { OpeningBreakoutStrategy } from './OpeningBreakoutStrategy.js';

@@ -45,6 +45,7 @@ export class TpGoldOpeningBreakout implements Strategy {
         let rangeHigh: number | null = null;
         let rangeLow: number | null = null;
         let rangeCaptured = false;
+        let dailyTradeCount = 0;
 
         let subIdx = 0;
 
@@ -79,6 +80,7 @@ export class TpGoldOpeningBreakout implements Strategy {
                 rangeCaptured = false;
                 currentTrade = null;
                 pendingBreakout = null;
+                dailyTradeCount = 0;
             }
 
             // 🚫 WEEKEND FILTER: Skip Saturday (6) and Sunday (0) completely
@@ -108,18 +110,27 @@ export class TpGoldOpeningBreakout implements Strategy {
             }
 
             // 🟡 CAPTURE RANGE (3:45 AM → 4:00 AM) IST
-            if (
-                (hour === 3 && minute >= 45) ||
-                (hour === 4 && minute === 0)
-            ) {
-                if (rangeHigh === null || c.high > rangeHigh) rangeHigh = c.high;
-                if (rangeLow === null || c.low < rangeLow) rangeLow = c.low;
+            if (hour === 3 && minute === 45) {
+                rangeHigh = c.high;
+                rangeLow = c.low;
+                continue;
+            }
 
-                if (hour === 4 && minute === 0) {
-                    rangeCaptured = true;
-                    console.log(`[Gold] Range Locked (3:45AM-4:00AM): H=${rangeHigh}, L=${rangeLow}`);
+            if (hour === 4 && minute === 0) {
+                const combinedHigh = Math.max(rangeHigh || 0, c.high);
+                const combinedLow = Math.min(rangeLow || 999999, c.low);
+                const totalRange = combinedHigh - combinedLow;
+
+                if (totalRange > 10) {
+                    console.log(`[Gold] ⚠️ Range gap (${totalRange.toFixed(2)}) > 50. Using 3:45 range only.`);
+                    // rangeHigh and rangeLow are already set to 3:45 values
+                } else {
+                    console.log(`[Gold] ✅ Range gap (${totalRange.toFixed(2)}) OK. Using combined 3:45-4:00 range.`);
+                    rangeHigh = combinedHigh;
+                    rangeLow = combinedLow;
                 }
 
+                rangeCaptured = true;
                 continue;
             }
 
@@ -151,6 +162,7 @@ export class TpGoldOpeningBreakout implements Strategy {
                                 currentTrade.rangeLow = rangeLow!;
                                 console.log(`[Gold] ENTRY BUY TRIGGERED @ ${pendingBreakout.breakoutHigh} (Sub-candle High Sweep)`);
                                 pendingBreakout = null;
+                                dailyTradeCount++;
                             } else if (pendingBreakout.direction === 'sell' && sc.low <= pendingBreakout.breakoutLow) {
                                 currentTrade = this.createTrade(
                                     pendingBreakout.breakoutLow,
@@ -163,6 +175,7 @@ export class TpGoldOpeningBreakout implements Strategy {
                                 currentTrade.rangeLow = rangeLow!;
                                 console.log(`[Gold] ENTRY SELL TRIGGERED @ ${pendingBreakout.breakoutLow} (Sub-candle Low Sweep)`);
                                 pendingBreakout = null;
+                                dailyTradeCount++;
                             }
                         }
                     }
@@ -230,7 +243,7 @@ export class TpGoldOpeningBreakout implements Strategy {
             }
 
             // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
-            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow) {
+            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount === 0) {
                 // 🚫 DO NOT enter new trades after 11:30 PM IST to avoid end-of-day carryover
                 if (hour === 23 && minute >= 30) {
                     continue;
@@ -257,7 +270,7 @@ export class TpGoldOpeningBreakout implements Strategy {
                     const bodySize = Math.abs(c.open - c.close);
                     const bodyPercentage = totalRange > 0 ? (bodySize / totalRange) : 0;
 
-                    if (bodyPercentage < 0.85) {
+                    if (bodyPercentage < 0.4) {
                         direction = null; // Reject trade
                         console.log(`[Gold] REJECTED Breakout @ ${c.close} (Body too small: ${(bodyPercentage * 100).toFixed(1)}%)`);
                     }
@@ -295,7 +308,7 @@ export class TpGoldOpeningBreakout implements Strategy {
         params: any
     ): Trade {
         const risk = Math.abs(entryPrice - slPrice);
-        let tp = direction === 'buy' ? entryPrice + (risk * 2.1) : entryPrice - (risk * 2.1);
+        let tp = direction === 'buy' ? entryPrice + (risk * 1.9) : entryPrice - (risk * 1.9);
 
         // 🎯 Apply Precision
         const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
@@ -381,3 +394,4 @@ export class TpGoldOpeningBreakout implements Strategy {
         return trs.reduce((a, b) => a + b, 0) / (trs.length || 1);
     }
 }
+
