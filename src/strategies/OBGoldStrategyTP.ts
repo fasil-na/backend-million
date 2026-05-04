@@ -257,7 +257,7 @@ export class TpGoldOpeningBreakout implements Strategy {
             }
 
             // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
-            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount === 10) {
+            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount === 0) {
                 // 🚫 DO NOT enter new trades after 11:30 PM IST to avoid end-of-day carryover
                 if (hour === 23 && minute >= 30) {
                     continue;
@@ -499,7 +499,7 @@ export class TpGoldOpeningBreakout implements Strategy {
         params: any
     ): Trade {
         const risk = Math.abs(entryPrice - slPrice);
-        let tp = direction === 'buy' ? entryPrice + (risk * 1.9) : entryPrice - (risk * 1.9);
+        let tp = direction === 'buy' ? entryPrice + (risk * 2) : entryPrice - (risk * 2);
 
         console.log(`[Gold-Trade] 🛠️ Creating ${direction} trade. Entry:${entryPrice}, SL-Price:${slPrice}, Risk:${risk.toFixed(2)}, TP-Target:${tp.toFixed(2)}`);
 
