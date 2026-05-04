@@ -26,7 +26,6 @@ export class TpGoldOpeningBreakout implements Strategy {
         const {
             capital = 1000,
             feeRate = 0.0005,
-            atrMultiplierSL = 1,
             breakoutBuffer = 2
         } = params;
 
@@ -275,6 +274,30 @@ export class TpGoldOpeningBreakout implements Strategy {
                         console.log(`[Gold] REJECTED Breakout @ ${c.close} (Body too small: ${(bodyPercentage * 100).toFixed(1)}%)`);
                     }
                 }
+
+                // 📏 ENTRY DISTANCE CHECK (MIN 5 POINTS)
+                if (direction) {
+                    if (direction === 'buy') {
+                        console.log(c.high,'c.high',rangeHigh)
+                        const distance = c.high - rangeHigh!;
+                        if (distance < 5) {
+                            console.log(`[Gold] REJECTED BUY @ ${c.close} (Breakout High too far: ${distance.toFixed(2)} pts)`);
+                            direction = null;
+                        }
+                    } else if (direction === 'sell') {
+                        const distance = rangeLow! - c.low;
+                            console.log(c.low,'c.rangeLow',rangeLow)
+                        if (distance <5) {
+                            console.log(`[Gold] REJECTED SELL @ ${c.close} (Breakout Low too far: ${distance.toFixed(2)} pts)`);
+                            direction = null;
+                        }
+                    }
+                }
+
+
+
+
+
 
                 if (direction) {
                     // Determine expiry (end of the next candle)
