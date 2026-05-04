@@ -14,13 +14,28 @@ import { TradeService } from '../services/TradeService.js';
 export class TpGoldOpeningBreakout implements Strategy {
     id = 'tp-gold-opening-breakout';
     name = 'TpGold Opening Breakout';
-    description = '3:45–4:00 IST range breakout with ATR SL and trailing SL';
+    description = '3:45–4:00 IST range breakout with fixed ATR SL and TP';
+
+    private static rangeHigh: number | null = null;
+    private static rangeLow: number | null = null;
+    private static rangeCaptured = false;
+    private static pendingBreakout: { 
+        direction: 'buy' | 'sell', 
+        breakoutHigh: number, 
+        breakoutLow: number, 
+        validUntil: number 
+    } | null = null;
+    private static dailyTradeCount = 0;
+    private static lastResetDay: string | null = null;
 
     run(
         candles: Candle[],
         params: Record<string, any>,
         subCandles: Candle[] = []
-    ): { trades: Trade[]; finalBalance: number; activeTrade?: Trade | null } {
+    ): any {
+        if (params.type === 'live') {
+            return this.checkSignal(candles, params);
+        }
         console.log("🚀 ~ GoldOpeningBreakout ~ run ~ candles:", candles.length)
 
         const {
@@ -278,7 +293,6 @@ export class TpGoldOpeningBreakout implements Strategy {
                 // 📏 ENTRY DISTANCE CHECK (MIN 5 POINTS)
                 if (direction) {
                     if (direction === 'buy') {
-                        console.log(c.high,'c.high',rangeHigh)
                         const distance = c.high - rangeHigh!;
                         if (distance < 5) {
                             console.log(`[Gold] REJECTED BUY @ ${c.close} (Breakout High too far: ${distance.toFixed(2)} pts)`);
@@ -286,7 +300,6 @@ export class TpGoldOpeningBreakout implements Strategy {
                         }
                     } else if (direction === 'sell') {
                         const distance = rangeLow! - c.low;
-                            console.log(c.low,'c.rangeLow',rangeLow)
                         if (distance <5) {
                             console.log(`[Gold] REJECTED SELL @ ${c.close} (Breakout Low too far: ${distance.toFixed(2)} pts)`);
                             direction = null;
@@ -322,6 +335,161 @@ export class TpGoldOpeningBreakout implements Strategy {
         };
     }
 
+    private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
+        if (candles.length < 10) return { matched: false };
+
+        const settings = params;
+        const now = dayjs().tz('Asia/Kolkata');
+        const currentDay = now.format('YYYY-MM-DD');
+        const currentHour = now.hour();
+        const currentMinute = now.minute();
+
+        // 🔄 RESET SESSION at 3:30 AM IST or New Day
+        const isResetTime = currentHour === 3 && currentMinute === 30;
+        if (TpGoldOpeningBreakout.lastResetDay !== currentDay || isResetTime) {
+            TpGoldOpeningBreakout.rangeHigh = null;
+            TpGoldOpeningBreakout.rangeLow = null;
+            TpGoldOpeningBreakout.rangeCaptured = false;
+            TpGoldOpeningBreakout.pendingBreakout = null;
+            TpGoldOpeningBreakout.dailyTradeCount = 0;
+            if (TpGoldOpeningBreakout.lastResetDay !== currentDay) {
+                TpGoldOpeningBreakout.lastResetDay = currentDay;
+                console.log(`[Gold-Live] 🔄 New day reset: ${currentDay}`);
+            }
+        }
+
+        const i = candles.length - 1;
+        const c = candles[i];
+        if (!c) return { matched: false };
+
+        const time = dayjs(c.time).tz('Asia/Kolkata');
+        const hour = time.hour();
+        const minute = time.minute();
+
+        // 🚫 Lockout Check
+        if (params.hasTradedToday || TpGoldOpeningBreakout.dailyTradeCount > 0) {
+            return { matched: false };
+        }
+
+        // 🟡 CAPTURE RANGE (3:45 AM → 4:00 AM) IST
+        if (hour === 3 && minute === 45) {
+            TpGoldOpeningBreakout.rangeHigh = c.high;
+            TpGoldOpeningBreakout.rangeLow = c.low;
+        }
+
+        if (hour === 4 && minute === 0) {
+            const combinedHigh = Math.max(TpGoldOpeningBreakout.rangeHigh || 0, c.high);
+            const combinedLow = Math.min(TpGoldOpeningBreakout.rangeLow || 999999, c.low);
+            const totalRange = combinedHigh - combinedLow;
+
+            if (totalRange <= 10) {
+                TpGoldOpeningBreakout.rangeHigh = combinedHigh;
+                TpGoldOpeningBreakout.rangeLow = combinedLow;
+            }
+            TpGoldOpeningBreakout.rangeCaptured = true;
+            console.log(`[Gold-Live] ✅ Range Captured: ${TpGoldOpeningBreakout.rangeHigh} - ${TpGoldOpeningBreakout.rangeLow}`);
+        }
+
+        // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
+        if (!TpGoldOpeningBreakout.rangeCaptured || TpGoldOpeningBreakout.pendingBreakout) {
+            return { matched: false };
+        }
+
+        // 🚫 DO NOT enter new trades after 11:30 PM IST
+        if (hour === 23 && minute >= 30) {
+            return { matched: false };
+        }
+
+        const prevCandle = candles[i - 1];
+        if (!prevCandle) return { matched: false };
+
+        const breakoutBuffer = params.breakoutBuffer || 2;
+        const breakoutHigh = TpGoldOpeningBreakout.rangeHigh! + breakoutBuffer;
+        const breakoutLow = TpGoldOpeningBreakout.rangeLow! - breakoutBuffer;
+
+        let direction: 'buy' | 'sell' | null = null;
+
+        if (prevCandle.close < breakoutHigh && c.close >= breakoutHigh) {
+            direction = 'buy';
+        } else if (prevCandle.close > breakoutLow && c.close <= breakoutLow) {
+            direction = 'sell';
+        }
+
+        if (direction) {
+            // BODY SIZE CHECK
+            const totalRange = c.high - c.low;
+            const bodySize = Math.abs(c.open - c.close);
+            const bodyPercentage = totalRange > 0 ? (bodySize / totalRange) : 0;
+
+            if (bodyPercentage < 0.4) {
+                console.log(`[Gold-Live] ❌ REJECTED: Body too small (${(bodyPercentage * 100).toFixed(1)}%)`);
+                direction = null;
+            }
+        }
+
+        if (direction) {
+            // DISTANCE CHECK
+            if (direction === 'buy') {
+                const distance = c.high - TpGoldOpeningBreakout.rangeHigh!;
+                if (distance < 5) direction = null;
+            } else {
+                const distance = TpGoldOpeningBreakout.rangeLow! - c.low;
+                if (distance < 5) direction = null;
+            }
+        }
+
+        if (direction) {
+            TpGoldOpeningBreakout.pendingBreakout = {
+                direction,
+                breakoutHigh: c.high,
+                breakoutLow: c.low,
+                validUntil: c.time + (30 * 60 * 1000) // 30 minutes from candle start = 15 minutes from candle close
+            };
+            console.log(`[Gold-Live] 🔔 PENDING ${direction.toUpperCase()} detected. Waiting for sweep of H:${c.high} L:${c.low}`);
+        }
+
+        return { matched: false }; // We only return matched:true in checkPendingBreakout
+    }
+
+    public static checkPendingBreakout(candle: Candle, params: any): { matched: boolean, trade?: Trade } {
+        if (!TpGoldOpeningBreakout.pendingBreakout) return { matched: false };
+
+        const pb = TpGoldOpeningBreakout.pendingBreakout;
+        const now = candle.time;
+
+        if (now > pb.validUntil) {
+            console.log(`[Gold-Live] ⌛ Pending breakout EXPIRED.`);
+            TpGoldOpeningBreakout.pendingBreakout = null;
+            return { matched: false };
+        }
+
+        let triggered = false;
+        if (pb.direction === 'buy' && candle.high >= pb.breakoutHigh) {
+            triggered = true;
+        } else if (pb.direction === 'sell' && candle.low <= pb.breakoutLow) {
+            triggered = true;
+        }
+
+        if (triggered) {
+            console.log(`[Gold-Live] 🚀 TRIGGERED! Swept ${pb.direction === 'buy' ? pb.breakoutHigh : pb.breakoutLow}`);
+            const instance = new TpGoldOpeningBreakout();
+            const slPrice = pb.direction === 'buy' ? pb.breakoutLow : pb.breakoutHigh;
+            const trade = instance.createTrade(
+                pb.direction === 'buy' ? pb.breakoutHigh : pb.breakoutLow,
+                pb.direction,
+                slPrice,
+                candle.time,
+                params
+            );
+            
+            TpGoldOpeningBreakout.pendingBreakout = null;
+            TpGoldOpeningBreakout.dailyTradeCount++;
+            return { matched: true, trade };
+        }
+
+        return { matched: false };
+    }
+
     // 🔧 CREATE TRADE
     private createTrade(
         entryPrice: number,
@@ -332,6 +500,8 @@ export class TpGoldOpeningBreakout implements Strategy {
     ): Trade {
         const risk = Math.abs(entryPrice - slPrice);
         let tp = direction === 'buy' ? entryPrice + (risk * 1.9) : entryPrice - (risk * 1.9);
+        
+        console.log(`[Gold-Trade] 🛠️ Creating ${direction} trade. Entry:${entryPrice}, SL-Price:${slPrice}, Risk:${risk.toFixed(2)}, TP-Target:${tp.toFixed(2)}`);
 
         // 🎯 Apply Precision
         const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
@@ -352,48 +522,8 @@ export class TpGoldOpeningBreakout implements Strategy {
             tp,
             status: 'open',
             profit: 0,
-            units,
-            lastHigh: entryPrice,
-            lastLow: entryPrice,
-            trailingCount: 0,
-            trailingHistory: []
+            units
         };
-    }
-
-    // 🔁 TRAILING SL
-    static updateTrailingSL(trade: Trade, candle: Candle, params: any = {}) {
-        const price = candle.close;
-        const oldSL = trade.sl;
-
-        if (trade.direction === 'buy') {
-            if (candle.high > (trade.lastHigh || trade.entryPrice)) {
-                const move = candle.high - (trade.lastHigh || trade.entryPrice);
-                trade.sl = (trade.sl || trade.entryPrice) + move;
-                trade.lastHigh = candle.high;
-            }
-        } else {
-            if (candle.low < (trade.lastLow || trade.entryPrice)) {
-                const move = (trade.lastLow || trade.entryPrice) - candle.low;
-                trade.sl = (trade.sl || trade.entryPrice) - move;
-                trade.lastLow = candle.low;
-            }
-        }
-
-        if (trade.sl !== oldSL) {
-            // 🎯 Apply Precision to Trail
-            const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
-            const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-XAU_USDT'] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-            const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-            trade.sl = Number(trade.sl!.toFixed(pricePrecision));
-
-            trade.trailingCount = (trade.trailingCount || 0) + 1;
-            if (!trade.trailingHistory) trade.trailingHistory = [];
-            trade.trailingHistory.push({
-                sl: trade.sl!,
-                marketPrice: price,
-                time: dayjs(candle.time).toISOString()
-            });
-        }
     }
 
     // 📊 ATR

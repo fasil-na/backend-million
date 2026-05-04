@@ -71,7 +71,7 @@ export class TradeService {
     }
 
     // final excecution of trade
-    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
+    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
         const { apiKey, apiSecret } = this.credentials;
 console.log(trade,'trade------')
         if (!apiKey || !apiSecret) {
@@ -82,6 +82,8 @@ console.log(trade,'trade------')
         const settings = SettingsService.getSettings();
         const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
+        console.log('[TradeService] 🔍 Incoming Trade:', JSON.stringify(trade, null, 2));
+
         const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
             trade.pair || settings.pair,
             Number(trade.units),
@@ -91,6 +93,8 @@ console.log(trade,'trade------')
             trade.direction || 'buy',
             trade.entryPrice || 0
         );
+
+        console.log(`[TradeService] ⚙️ Formatted Params: Pair:${pair}, Qty:${qty}, TP:${tpPrice}, SL:${slPrice}`);
 
         const baseOrder: any = {
             side: trade.direction?.toLowerCase() || 'buy',
@@ -104,7 +108,7 @@ console.log(trade,'trade------')
             margin_currency_short_name: marginName
         };
 
-        // if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
+        if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
         if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
 
         const body = {
@@ -112,10 +116,11 @@ console.log(trade,'trade------')
             "order": baseOrder
         };
 
-        console.log(body, 'body======');
-
+        console.log('[TradeService] 📦 Final Body:', JSON.stringify(body, null, 2));
+        
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
+       
         try {
             console.log(`[TradeService] 🚀 Executing ${trade.direction?.toUpperCase()} order for ${pair}...`);
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/create`, body, {

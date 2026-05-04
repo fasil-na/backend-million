@@ -21,8 +21,6 @@ export class SocketService {
     private static candles: Candle[] = []; // Cache for candlestick data
     private static lastPair: string = ''; // Track pair changes for cache invalidation
     private static lastResolution: string = ''; // Track resolution changes
-    private static lastKnownSLHigh: number | null = null;
-    private static lastKnownSLLow: number | null = null;
     private static currentPosition: Position | null = null;
     private static candleIndexMap = new Map<number, number>();
     private static isStrategyRunning = false;
@@ -151,8 +149,7 @@ export class SocketService {
                 this.candleIndexMap.clear();
                 this.lastPair = settings.pair;
                 this.lastResolution = settings.timeInterval;
-                this.lastKnownSLHigh = null;
-                this.lastKnownSLLow = null;
+         
                 console.log(`[Lifecycle] 🔄 Resolution/Pair changed: ${settings.pair} ${settings.timeInterval}m. Clearing buffer.`);
             }
 
@@ -167,7 +164,17 @@ export class SocketService {
                 // If it's a 1m candle (fast trailing), trigger management immediately 
                 // without waiting for main interval completion.
                 if (incomingResolution === '1') {
-                    this.manageTrailingSL(data).catch(err => console.error('[Trailing] ❌ Sync Error:', err.message));
+                    // 🔍 CHECK PENDING BREAKOUT (Gold Strategy Specific)
+                    if (settings.selectedStrategyId === 'tp-gold-opening-breakout') {
+                        const strategy = strategies['tp-gold-opening-breakout'] as any;
+                        if (strategy.constructor?.checkPendingBreakout) {
+                            const result = strategy.constructor.checkPendingBreakout(data, settings);
+                            if (result.matched && result.trade) {
+                                console.log(`[Gold] 🚀 Pending Breakout Triggered on 1m candle!`);
+                                this.executeSignal(result.trade, settings).catch(err => console.error('[Signal] ❌ Execute Error:', err.message));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -313,10 +320,6 @@ export class SocketService {
 
                     console.log(`[Position] Trade CLOSED for ${pair}`);
 
-                    // Always reset SL tracking state regardless of what happens below
-                    this.lastKnownSLHigh = null;
-                    this.lastKnownSLLow = null;
-
                     // Sync balance if live trading — but close the trade regardless of result
                     if (settings.isLiveTrading) {
                         const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
@@ -363,111 +366,6 @@ export class SocketService {
                 this.currentPosition ? `ACTIVE @ ${this.currentPosition.entry_price}` : 'NONE'
             );
         });
-    }
-
-    private static async manageTrailingSL(candleOverride?: Candle) {
-        try {
-            const settings = SettingsService.getSettings();
-
-            // Only manage if trade is open
-            if (settings.activeTradeStatus !== 'open') {
-                return;
-            }
-
-            const pair = settings.pair;
-            const lastCandle = candleOverride || this.candles[this.candles.length - 1];
-            if (!lastCandle) {
-                return;
-            }
-
-            const activeTrade = await TradeHistoryService.getActiveTrade();
-            if (!activeTrade || activeTrade.status !== 'open') {
-                return;
-            }
-
-            const strategy = strategies[settings.selectedStrategyId || 'opening-breakout'] as any;
-            const updateTrailingSL = strategy.constructor?.updateTrailingSL || OpeningBreakoutStrategy.updateTrailingSL;
-
-            // 🛡️ RECOVERY/PAPER BYPASS: If it's a simulated trade, don't check the exchange
-            if (activeTrade.type === 'paper' || activeTrade.type === 'recovery') {
-                // Update SL logic
-                const preSL = activeTrade.sl || 0;
-                updateTrailingSL(activeTrade, lastCandle);
-
-                const cleanPair = (pair || '').replace('B-', '').toLowerCase();
-                const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-
-                const newSL = Number((activeTrade.sl || 0).toFixed(pricePrecision));
-
-                if (Math.abs(newSL - preSL) > (preSL * 0.0001)) {
-                    console.log(`[Trailing] 📊 Paper/Recovery SL Update: ${preSL} -> ${newSL}`);
-                    await TradeHistoryService.saveTrade(activeTrade);
-                    this.io.emit('trade-history-update', activeTrade);
-                }
-                return;
-            }
-
-            // --- REAL TRADE SYNC LOGIC ---
-            let pos: any = this.currentPosition;
-            const cleanS = (pair || '').replace('B-', '').toLowerCase();
-
-            if (!pos) {
-                const positions = await TradeService.getPositions();
-                pos = Array.isArray(positions)
-                    ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
-                    : null;
-
-                if (pos) {
-                    console.log(`[Trailing] 🎉 Restored position from REST: @ ${pos.entry_price}`);
-                    this.currentPosition = pos;
-                } else {
-                    console.warn(`[Trailing] 🚑 Self-Correction: Local state says OPEN but exchange is FLAT. Force resetting status.`);
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-                    return;
-                }
-            }
-            if (activeTrade && activeTrade.status === 'open') {
-                const oldSL = activeTrade.sl || Number(pos.stop_loss_price || pos.stop_loss_trigger || 0);
-
-                // Update SL logic
-                updateTrailingSL(activeTrade, lastCandle);
-
-                const calculatedSL = activeTrade.sl || oldSL;
-
-                // 🎯 Dynamically round to the exact precision mandated by the exchange for this pair
-                const cleanPair = (pair || '').replace('B-', '').toLowerCase();
-                const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-
-                const newSL = Number(calculatedSL.toFixed(pricePrecision));
-                const change = Math.abs(newSL - oldSL);
-                const threshold = oldSL * 0.0001;
-
-                if (change > threshold) {
-                    console.log(`[Trailing] 📈 New peak/valley: ${lastCandle.high}/${lastCandle.low}. Moving SL: ${oldSL} -> ${newSL}`);
-
-                    if (activeTrade.type === 'real') {
-                        await TradeService.updatePositionTPSL({
-                            positionId: pos.id,
-                            stopLossPrice: newSL
-                        });
-                    }
-
-                    this.lastKnownSLHigh = activeTrade.lastHigh || null;
-                    this.lastKnownSLLow = activeTrade.lastLow || null;
-                    await TradeHistoryService.saveTrade(activeTrade);
-                    this.io.emit('trade-history-update', activeTrade);
-                } else {
-                    // console.log(`[Trailing] No Sl Move. Price Action: H:${lastCandle.high} L:${lastCandle.low} within range.`);
-                }
-            } else {
-                console.warn("[Trailing] ⚠️ Bot state is 'open' but no matching trade found in TradeHistory. Desync detected.");
-            }
-        } catch (err: any) {
-            console.error('[Trailing] Failed to manage SL:', err.message);
-        }
     }
 
     private static async executeLiveStrategy() {
@@ -617,9 +515,6 @@ export class SocketService {
                             console.log(`[Strategy] ✅ REAL Entry Verified. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
                         }
 
-                        this.lastKnownSLHigh = latest.lastHigh || latest.entryPrice;
-                        this.lastKnownSLLow = latest.lastLow || latest.entryPrice;
-
                         await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                         this.io.emit('settings-update', SettingsService.getSettings());
 
@@ -655,9 +550,6 @@ export class SocketService {
                     // PAPER TRADE LOGIC
                     console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
 
-                    this.lastKnownSLHigh = latest.lastHigh || latest.entryPrice;
-                    this.lastKnownSLLow = latest.lastLow || latest.entryPrice;
-
                     await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                     this.io.emit('settings-update', SettingsService.getSettings());
 
@@ -670,13 +562,80 @@ export class SocketService {
                         type: 'paper',
                         entryTime: new Date().toISOString()
                     });
-                    console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
+                        console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
                 }
             } else {
                 console.log('[Strategy] 🧊 No signal found on this candle.');
             }
         } catch (err: any) {
             console.error('[Autonomous] Strategy routine failed:', err.message);
+        }
+    }
+
+    private static async executeSignal(latest: Trade, settings: any) {
+        const pair = settings.pair;
+        const cleanS = (pair || '').replace('B-', '').toLowerCase();
+        
+        SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
+        this.io.emit('strategy-signal', { pair, trade: latest });
+
+        const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
+
+        if (isRealTrade) {
+            if (this.isPlacingOrder) return;
+            this.isPlacingOrder = true;
+            try {
+                console.log(`[Strategy] 🚀 Executing REAL entry for ${pair}...`);
+                await TradeService.executeFutureOrder({
+                    ...latest,
+                    stop_loss_price: latest.sl,
+                    take_profit_price: latest.tp
+                });
+
+                await new Promise(res => setTimeout(res, 1000));
+
+                const positions = await TradeService.getPositions();
+                const newPos = Array.isArray(positions)
+                    ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
+                    : null;
+
+                if (newPos) {
+                    this.currentPosition = newPos;
+                    console.log(`[Strategy] ✅ REAL Entry Verified. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
+                }
+
+                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                this.io.emit('settings-update', SettingsService.getSettings());
+
+                const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
+                await TradeHistoryService.saveTrade({
+                    ...latest,
+                    pair,
+                    direction: latest.direction,
+                    entryPrice: entryPrice,
+                    status: 'open',
+                    type: 'real',
+                    entryTime: new Date().toISOString()
+                });
+            } catch (err: any) {
+                console.error('[Strategy] ❌ REAL Execution Failed:', err.message);
+            } finally {
+                this.isPlacingOrder = false;
+            }
+        } else {
+            console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
+            await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+            this.io.emit('settings-update', SettingsService.getSettings());
+
+            await TradeHistoryService.saveTrade({
+                ...latest,
+                pair,
+                direction: latest.direction,
+                entryPrice: latest.entryPrice,
+                status: 'open',
+                type: 'paper',
+                entryTime: new Date().toISOString()
+            });
         }
     }
 
@@ -688,39 +647,62 @@ export class SocketService {
             const activeTrade = await TradeHistoryService.getActiveTrade();
             if (!activeTrade) return;
 
-            const currentPrice = tick.close;
             const sl = activeTrade.sl || activeTrade.stop_loss_price || 0;
+            const tp = activeTrade.tp || activeTrade.take_profit_price || 0;
             const isBuy = activeTrade.direction === 'buy';
 
-            // Check for SL Hit (Every Tick)
-            let slHit = false;
-            if (isBuy && currentPrice <= sl && sl > 0) slHit = true;
-            if (!isBuy && currentPrice >= sl && sl > 0) slHit = true;
+            // 🎯 TICKER-BASED PRECISION: Check against the HIGH and LOW of the current tick update.
+            // This ensures we catch SL/TP hits even if the 'close' price has already bounced back.
+            let exitReason = '';
+            if (isBuy) {
+                if (sl > 0 && tick.low <= sl) exitReason = 'SL';
+                else if (tp > 0 && tick.high >= tp) exitReason = 'TP';
+            } else {
+                if (sl > 0 && tick.high >= sl) exitReason = 'SL';
+                else if (tp > 0 && tick.low <= tp) exitReason = 'TP';
+            }
 
-            if (slHit) {
-                if (activeTrade.type === 'real') {
-                    if (!this.isClosingPosition) {
-                        console.log(`[Monitor] 🎯 REAL Price hit Stop Loss level ${sl}. Waiting for Exchange to close...`);
-                        this.isClosingPosition = true;
+            if (exitReason) {
+                const triggerPrice = exitReason === 'SL' ? sl : tp;
+
+                if (activeTrade.type === 'real' && !this.isClosingPosition) {
+                    this.isClosingPosition = true;
+                    try {
+                        const pair = settings.pair;
+                        const cleanS = (pair || '').replace('B-', '').toLowerCase();
+                        let pos = this.currentPosition;
+                        
+                        if (!pos) {
+                            const positions = await TradeService.getPositions();
+                            pos = Array.isArray(positions)
+                                ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
+                                : null;
+                        }
+
+                        if (pos) {
+                            console.log(`[Monitor] 🚀 Immediate Ticket-Based Exit for ${pair} (ID: ${pos.id})`);
+                            await TradeService.closePosition({ positionId: pos.id });
+                        }
+                    } catch (err: any) {
+                        console.error("[Monitor] ❌ Real exit failed:", err.message);
                     }
-                } else {
-                    // PAPER TRADE SL HIT
-                    console.log(`[Monitor] 🎯 PAPER Price hit Stop Loss level ${sl}. Closing trade in DB.`);
-
-                    activeTrade.status = 'closed';
-                    activeTrade.exitPrice = currentPrice;
-                    activeTrade.exitTime = new Date().toISOString();
-                    activeTrade.exitReason = 'Paper SL Hit';
-
-                    const { profit, fee } = calculateTradeProfit(activeTrade, currentPrice, 0.0005);
-                    activeTrade.profit = profit;
-                    activeTrade.fee = fee;
-
-                    await TradeHistoryService.saveTrade(activeTrade);
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-                    this.io.emit('trade-history-update', activeTrade);
                 }
+
+                // Update DB regardless (for paper, or to mark real as closing)
+                activeTrade.status = 'closed';
+                activeTrade.exitPrice = tick.close;
+                activeTrade.exitTime = new Date().toISOString();
+                activeTrade.exitReason = `Ticket ${exitReason} Hit`;
+
+                const { profit, fee } = calculateTradeProfit(activeTrade, tick.close, 0.0005);
+                activeTrade.profit = profit;
+                activeTrade.fee = fee;
+
+                await TradeHistoryService.saveTrade(activeTrade);
+                await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+                this.io.emit('settings-update', SettingsService.getSettings());
+                this.io.emit('trade-history-update', activeTrade);
+                this.isClosingPosition = false;
             }
         } catch (err: any) {
             console.error("Monitor status failed:", err.message);

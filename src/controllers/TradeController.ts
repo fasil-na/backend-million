@@ -55,6 +55,12 @@ export class TradeController {
                 const fallbackAtr = entryPrice * 0.01;
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - fallbackAtr : entryPrice + fallbackAtr;
             }
+            
+            // 🎯 TP GOLD STRATEGY: Calculate TP based on 1:1.9 RR ratio
+            const riskAmount = Math.abs(entryPrice - calculatedSL);
+            const calculatedTP = side.toLowerCase() === 'buy' 
+                ? entryPrice + (riskAmount * 1.9) 
+                : entryPrice - (riskAmount * 1.9);
 
             const rawPair = activePair;
             const staticData = TradeService.STATIC_INSTRUMENTS[rawPair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
@@ -72,7 +78,7 @@ export class TradeController {
                 quantityNum = Math.ceil((minNotional / entryPrice) / step) * step;
             }
 
-            const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side, entryPrice);
+            const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, calculatedTP, calculatedSL, side, entryPrice);
          
             try {
                 const result = await executeWithRetry(() =>
@@ -82,6 +88,7 @@ export class TradeController {
                         entryPrice: entryPrice,
                         units: formattedParams.qty,
                         stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                        take_profit_price: formattedParams.tpPrice > 0 ? formattedParams.tpPrice : undefined,
                         leverage: formattedParams.maxLeverage
                     })
                 );
@@ -93,6 +100,7 @@ export class TradeController {
                     entryPrice: entryPrice,
                     units: formattedParams.qty,
                     sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                    tp: formattedParams.tpPrice > 0 ? formattedParams.tpPrice : undefined,
                     status: 'open',
                     profit: 0,
                     type: 'real'
@@ -108,6 +116,7 @@ export class TradeController {
                     entryPrice: entryPrice,
                     units: formattedParams.qty,
                     sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                    tp: formattedParams.tpPrice > 0 ? formattedParams.tpPrice : undefined,
                     status: 'failed',
                     profit: 0,
                     type: 'real',
