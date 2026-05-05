@@ -160,20 +160,17 @@ export class SocketService {
             // 1. Monitor Price always (every tick/candle)
             if (settings.activeTradeStatus === 'open') {
                 this.monitorRealTimeSL(data).catch(err => console.error('[Monitor] ❌ Check Error:', err.message));
+            }
 
-                // If it's a 1m candle (fast trailing), trigger management immediately 
-                // without waiting for main interval completion.
-                if (incomingResolution === '1') {
-                    // 🔍 CHECK PENDING BREAKOUT (Gold Strategy Specific)
-                    if (settings.selectedStrategyId === 'tp-gold-opening-breakout') {
-                        const strategy = strategies['tp-gold-opening-breakout'] as any;
-                        if (strategy.constructor?.checkPendingBreakout) {
-                            const result = strategy.constructor.checkPendingBreakout(data, settings);
-                            if (result.matched && result.trade) {
-                                console.log(`[Gold] 🚀 Pending Breakout Triggered on 1m candle!`);
-                                this.executeSignal(result.trade, settings).catch(err => console.error('[Signal] ❌ Execute Error:', err.message));
-                            }
-                        }
+            // 🔍 CHECK PENDING BREAKOUT (Gold Strategy Specific)
+            // This needs to run on 1m candles to catch the sweep, even if main resolution is higher.
+            if (incomingResolution === '1' && settings.selectedStrategyId === 'tp-gold-opening-breakout') {
+                const strategy = strategies['tp-gold-opening-breakout'] as any;
+                if (strategy.constructor?.checkPendingBreakout) {
+                    const result = strategy.constructor.checkPendingBreakout(data, settings);
+                    if (result.matched && result.trade) {
+                        console.log(`[Gold] 🚀 Pending Breakout Triggered on 1m candle!`);
+                        this.executeSignal(result.trade, settings).catch(err => console.error('[Signal] ❌ Execute Error:', err.message));
                     }
                 }
             }
