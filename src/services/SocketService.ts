@@ -379,12 +379,14 @@ export class SocketService {
 
             if (activeTrade && activeTrade.status === 'open') {
                 console.log(`[Strategy] ⏭️ Trade is ALREADY OPEN (${activeTrade.type}). Skipping signal scan.`);
+                SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Trade is already open (${activeTrade.type})`);
                 return;
             }
 
             // Extra safety: Check settings flag too
             if (settings.activeTradeStatus === 'open') {
                 console.log(`[Strategy] ⏭️ Settings say trade is open. Skipping.`);
+                SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: ActiveTradeStatus is 'open' in settings`);
                 return;
             }
 
@@ -418,11 +420,16 @@ export class SocketService {
                     this.candleIndexMap.clear();
                     this.candles.forEach((c, i) => this.candleIndexMap.set(c.time, i));
                     console.log(`[Strategy] ✅ History loaded: ${this.candles.length} candles.`);
+                    SystemLogService.log('INFO', 'STRATEGY', `Successfully loaded ${this.candles.length} candles for ${pair}`);
+                } else {
+                    console.error(`[Strategy] ❌ Failed to fetch candlesticks for ${pair}`);
+                    SystemLogService.log('ERROR', 'STRATEGY', `Failed to fetch candlesticks for ${pair}: ${response.message || 'Unknown error'}`);
                 }
             }
 
             if (this.candles.length === 0) {
                 console.warn('[Strategy] ❌ No data available for analysis. Skipping cycle.');
+                SystemLogService.log('ERROR', 'STRATEGY', `Scan aborted: No candle data available for ${pair}`);
                 return;
             }
 
@@ -432,6 +439,7 @@ export class SocketService {
 
             if (!strategy) {
                 console.error(`[Strategy] ❌ CRITICAL: Unknown strategy ID: ${selectedStrategyId}`);
+                SystemLogService.log('ERROR', 'STRATEGY', `CRITICAL: Unknown strategy ID: ${selectedStrategyId}`);
                 return;
             }
 
@@ -445,6 +453,7 @@ export class SocketService {
 
                 if (livePos) {
                     console.log(`[Strategy] 🚑 Exchange has active position. Syncing local state ONLY.`);
+                    SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Exchange has active position for ${pair}`);
                     this.currentPosition = livePos;
                     await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                     this.io.emit('settings-update', SettingsService.getSettings());
@@ -489,9 +498,11 @@ export class SocketService {
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 this.lastSignalTime = latestCandle.time;
+                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction.toUpperCase()} for ${pair} detected. Initializing execution...`);
                 await this.executeSignal(latest, settings);
             } else {
                 console.log('[Strategy] 🧊 No signal found on this candle.');
+                // SystemLogService.log('INFO', 'STRATEGY', `Scan complete: No signal found for ${pair}`);
             }
         } catch (err: any) {
             console.error('[Autonomous] Strategy routine failed:', err.message);
@@ -503,7 +514,7 @@ export class SocketService {
         const pair = settings.pair;
         const cleanS = (pair || '').replace('B-', '').toLowerCase();
         
-        SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
+        SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${latest.type || (settings.isLiveTrading ? 'REAL' : 'PAPER')} signal for ${pair}`);
         this.io.emit('strategy-signal', { pair, trade: latest });
 
         const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
@@ -578,6 +589,7 @@ export class SocketService {
                     entryTime: new Date().toISOString()
                 });
                 console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
+                SystemLogService.log('INFO', 'STRATEGY', `✅ PAPER trade initialized successfully for ${pair}`);
             } catch (err: any) {
                 console.error('[Strategy] ❌ PAPER Execution Failed:', err.message);
                 SystemLogService.log('ERROR', 'STRATEGY', `PAPER Execution Failed for ${pair}: ${err.message}`);
