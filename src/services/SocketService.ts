@@ -125,6 +125,7 @@ export class SocketService {
 
     private static setupCoinDCXListeners() {
         coinDCXSocket.on('candlestick', async (data: Candle) => {
+            // SystemLogService.log('INFO', 'SOCKET', `Candlestick received: ${JSON.stringify(data)}`);
             const settings = SettingsService.getSettings();
             const incomingPair = (data as any).pair || settings.pair;
 
@@ -150,7 +151,7 @@ export class SocketService {
                 this.candleIndexMap.clear();
                 this.lastPair = settings.pair;
                 this.lastResolution = settings.timeInterval;
-         
+
                 console.log(`[Lifecycle] 🔄 Resolution/Pair changed: ${settings.pair} ${settings.timeInterval}m. Clearing buffer.`);
             }
 
@@ -513,7 +514,7 @@ export class SocketService {
     private static async executeSignal(latest: Trade, settings: any) {
         const pair = settings.pair;
         const cleanS = (pair || '').replace('B-', '').toLowerCase();
-        
+
         SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${latest.type || (settings.isLiveTrading ? 'REAL' : 'PAPER')} signal for ${pair}`);
         this.io.emit('strategy-signal', { pair, trade: latest });
 
@@ -629,7 +630,7 @@ export class SocketService {
                         const pair = settings.pair;
                         const cleanS = (pair || '').replace('B-', '').toLowerCase();
                         let pos = this.currentPosition;
-                        
+
                         if (!pos) {
                             const positions = await TradeService.getPositions();
                             pos = Array.isArray(positions)
