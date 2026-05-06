@@ -119,6 +119,7 @@ export class SocketService {
             }
         } catch (err: any) {
             console.error('[Sync] Failed to synchronize state:', err.message);
+            SystemLogService.log('ERROR', 'SYNC', `Failed to synchronize state: ${err.message}`);
         }
     }
 
@@ -253,8 +254,9 @@ export class SocketService {
                     }
                     return item;
                 });
-            } catch (err) {
+            } catch (err: any) {
                 console.error("[Position] ❌ Unpacking failed:", err);
+                SystemLogService.log('ERROR', 'POSITION', `Unpacking failed: ${err.message || err}`);
             }
 
             // Fuzzy matching for pair names
@@ -295,8 +297,9 @@ export class SocketService {
                             this.currentPosition = confirmedPos;
                             return;
                         }
-                    } catch (err) {
+                    } catch (err: any) {
                         console.error(`[Position] REST verification failed, defaulting to socket 'Closed' state.`);
+                        SystemLogService.log('ERROR', 'POSITION', `REST verification failed: ${err.message}`);
                     }
                 }
             }
@@ -323,8 +326,9 @@ export class SocketService {
                         try {
                             // 🎯 Removed bankBalance sync to avoid AWS 404/GET body issues
                             // await TradeService.syncLiveBalance(marginCurrency);
-                        } catch (err) {
+                        } catch (err: any) {
                             console.error('[Position] Balance sync failed:', err);
+                            SystemLogService.log('ERROR', 'POSITION', `Balance sync failed: ${err.message}`);
                         }
 
                         // Record trade exit details 
@@ -347,8 +351,9 @@ export class SocketService {
                                 console.log(`[Position] Recorded exit for ${pair} at ${exitPrice}. Profit: ${profit}`);
                                 this.io.emit('trade-history-update', activeTrade);
                             }
-                        } catch (err) {
+                        } catch (err: any) {
                             console.error('[Position] Failed to record trade exit:', err);
+                            SystemLogService.log('ERROR', 'POSITION', `Failed to record trade exit: ${err.message}`);
                         }
                     }
 
@@ -484,88 +489,13 @@ export class SocketService {
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 this.lastSignalTime = latestCandle.time;
-                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
-                this.io.emit('strategy-signal', { pair, trade: latest });
-
-                const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
-                const tradeType = isRealTrade ? 'real' : 'paper';
-
-                if (isRealTrade) {
-                    if (this.isPlacingOrder) return;
-                    this.isPlacingOrder = true;
-                    try {
-                        console.log(`[Strategy] 🚀 Executing REAL entry for ${pair}...`);
-                        await TradeService.executeFutureOrder({
-                            ...latest,
-                            stop_loss_price: latest.sl
-                        });
-
-                        await new Promise(res => setTimeout(res, 1000));
-
-                        const positions = await TradeService.getPositions();
-                        const newPos = Array.isArray(positions)
-                            ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
-                            : null;
-
-                        if (newPos) {
-                            this.currentPosition = newPos;
-                            console.log(`[Strategy] ✅ REAL Entry Verified. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
-                        }
-
-                        await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                        this.io.emit('settings-update', SettingsService.getSettings());
-
-                        const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
-                        await TradeHistoryService.saveTrade({
-                            ...latest,
-                            pair,
-                            direction: latest.direction,
-                            entryPrice: entryPrice,
-                            status: 'open',
-                            type: 'real',
-                            entryTime: new Date().toISOString()
-                        });
-                        console.log(`[Strategy] 🏁 Real trade cycle initialized.`);
-                    } catch (err: any) {
-                        const errorMessage = err.response?.data?.message || err.message;
-                        console.error('[Strategy] ❌ REAL Execution Failed:', errorMessage);
-                        await TradeHistoryService.saveTrade({
-                            ...latest,
-                            pair,
-                            direction: latest.direction,
-                            entryPrice: latest.entryPrice,
-                            status: 'failed',
-                            type: 'real',
-                            profit: 0,
-                            entryTime: new Date().toISOString(),
-                            executionError: errorMessage
-                        });
-                    } finally {
-                        this.isPlacingOrder = false;
-                    }
-                } else {
-                    // PAPER TRADE LOGIC
-                    console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
-
-                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-
-                    await TradeHistoryService.saveTrade({
-                        ...latest,
-                        pair,
-                        direction: latest.direction,
-                        entryPrice: latest.entryPrice,
-                        status: 'open',
-                        type: 'paper',
-                        entryTime: new Date().toISOString()
-                    });
-                        console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
-                }
+                await this.executeSignal(latest, settings);
             } else {
                 console.log('[Strategy] 🧊 No signal found on this candle.');
             }
         } catch (err: any) {
             console.error('[Autonomous] Strategy routine failed:', err.message);
+            SystemLogService.log('ERROR', 'STRATEGY', `Autonomous Strategy routine failed: ${err.message}`);
         }
     }
 
@@ -615,24 +545,43 @@ export class SocketService {
                     entryTime: new Date().toISOString()
                 });
             } catch (err: any) {
-                console.error('[Strategy] ❌ REAL Execution Failed:', err.message);
+                const errorMessage = err.response?.data?.message || err.message;
+                console.error('[Strategy] ❌ REAL Execution Failed:', errorMessage);
+                SystemLogService.log('ERROR', 'STRATEGY', `REAL Execution Failed: ${errorMessage}`);
+                await TradeHistoryService.saveTrade({
+                    ...latest,
+                    pair,
+                    direction: latest.direction,
+                    entryPrice: latest.entryPrice,
+                    status: 'failed',
+                    type: 'real',
+                    profit: 0,
+                    entryTime: new Date().toISOString(),
+                    executionError: errorMessage
+                });
             } finally {
                 this.isPlacingOrder = false;
             }
         } else {
-            console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
-            await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-            this.io.emit('settings-update', SettingsService.getSettings());
+            try {
+                console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
+                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                this.io.emit('settings-update', SettingsService.getSettings());
 
-            await TradeHistoryService.saveTrade({
-                ...latest,
-                pair,
-                direction: latest.direction,
-                entryPrice: latest.entryPrice,
-                status: 'open',
-                type: 'paper',
-                entryTime: new Date().toISOString()
-            });
+                await TradeHistoryService.saveTrade({
+                    ...latest,
+                    pair,
+                    direction: latest.direction,
+                    entryPrice: latest.entryPrice,
+                    status: 'open',
+                    type: 'paper',
+                    entryTime: new Date().toISOString()
+                });
+                console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
+            } catch (err: any) {
+                console.error('[Strategy] ❌ PAPER Execution Failed:', err.message);
+                SystemLogService.log('ERROR', 'STRATEGY', `PAPER Execution Failed for ${pair}: ${err.message}`);
+            }
         }
     }
 
@@ -682,6 +631,7 @@ export class SocketService {
                         }
                     } catch (err: any) {
                         console.error("[Monitor] ❌ Real exit failed:", err.message);
+                        SystemLogService.log('ERROR', 'MONITOR', `Real exit failed for ${settings.pair}: ${err.message}`);
                     }
                 }
 
@@ -703,6 +653,7 @@ export class SocketService {
             }
         } catch (err: any) {
             console.error("Monitor status failed:", err.message);
+            SystemLogService.log('ERROR', 'MONITOR', `Monitor status failed: ${err.message}`);
         }
     }
 
@@ -797,61 +748,13 @@ export class SocketService {
                         console.log(`[Recovery] ⏭️ Skipping recovery for ${pair} at ${t.entryTime} (Real/Paper trade found)`);
                         continue;
                     }
-
-                    console.log(`[Recovery] 💾 Saving trade for ${pair} at ${t.entryTime}. Trails found: ${t.trailingHistory?.length || 0}`);
-
-                    if (t.trailingHistory && t.trailingHistory.length > 0) {
-                        console.log(`[Recovery] 🔍 First trail sample: SL=${t.trailingHistory[0].sl}, Market=${t.trailingHistory[0].marketPrice}`);
-                    }
-
-
-                    await TradeHistoryService.saveTrade({
-                        ...t,
-                        pair,
-                        type: 'recovery',
-                        status: 'closed'
-                    });
+                    await TradeHistoryService.saveTrade({ ...t, pair, type: 'recovered' });
                 }
             }
-
-            // 6. Sync active trade if one exists at the end of the simulation
-            if (result && result.activeTrade) {
-                const active = result.activeTrade;
-
-                // 🛡️ DUAL-TRADE PROTECTION for Active Trade
-                const existingActive = await TradeHistoryService.getActiveTrade();
-                const overlap = await TradeHistoryService.findOverlap(pair, active.entryTime);
-
-                if (existingActive || overlap) {
-                    console.log(`[Recovery] ⏭️ Active trade already exists for ${pair}. Skipping recovery version.`);
-                    const s = SettingsService.getSettings();
-                    if (s.activeTradeStatus !== 'open') {
-                        await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                        this.io.emit('settings-update', SettingsService.getSettings());
-                    }
-                } else {
-                    console.log('here-----=====')
-                    await TradeHistoryService.saveTrade({
-                        ...active,
-                        pair,
-                        type: 'recovery',
-                        status: 'open'
-                    });
-                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-                }
-            } else {
-                // Only mark closed if there's no existing REAL/PAPER trade open
-                const existingRealActive = await TradeHistoryService.getActiveTrade();
-                if (!existingRealActive) {
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    this.io.emit('settings-update', SettingsService.getSettings());
-                }
-            }
-
-            console.log(`[Recovery] ✅ Synced ${result?.trades?.length || 0} historical trades for today.`);
+            console.log(`[Recovery] ✅ History recovery complete for ${pair}.`);
         } catch (err: any) {
-            console.error('[Recovery] ❌ Failed to recover today\'s state:', err.message);
+            console.error('[Autonomous] Recovery Failed:', err.message);
+            SystemLogService.log('ERROR', 'RECOVERY', `Recovery Failed: ${err.message}`);
         }
     }
 }
