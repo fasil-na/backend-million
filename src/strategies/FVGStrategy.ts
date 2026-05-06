@@ -25,7 +25,7 @@ export class FVGStrategy implements Strategy {
     } {
         const trades: Trade[] = [];
         let balance = params.capital || 250;
-        const rr = params.riskRewardRatio || 3.5;
+        const rr = params.riskRewardRatio || 3.7;
         const riskAmount = params.riskAmount || 5; // Fixed risk amount per trade
         const fvgExpiryCandles = 50; // Max candles to wait for return
 
@@ -164,7 +164,8 @@ export class FVGStrategy implements Strategy {
                             sl: sl,
                             tp: tp,
                             status: "open",
-                            profit: 0
+                            profit: 0,
+                            indicators: { fvgTop: fvg.top, fvgBottom: fvg.bottom }
                         };
                         fvg.filled = true;
                         fvg.filledAt = curr.time;
@@ -205,7 +206,8 @@ export class FVGStrategy implements Strategy {
                             sl: sl,
                             tp: tp,
                             status: "open",
-                            profit: 0
+                            profit: 0,
+                            indicators: { fvgTop: fvg.top, fvgBottom: fvg.bottom }
                         };
                         fvg.filled = true;
                         fvg.filledAt = curr.time;

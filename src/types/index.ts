@@ -24,6 +24,7 @@ export interface Trade {
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
     executionError?: string | undefined;
+    indicators?: any;
     trailingHistory?: {
         sl: number;
         marketPrice: number;
