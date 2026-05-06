@@ -19,6 +19,7 @@ export interface Trade {
     lastLow?: number | undefined;
     units?: number | undefined; 
     fee?: number | undefined;
+    pnlPercent?: number | undefined;
     trailingCount?: number | undefined;
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
