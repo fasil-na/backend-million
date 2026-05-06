@@ -362,23 +362,11 @@ export class TpGoldOpeningBreakout implements Strategy {
         const minute = time.minute();
 
         // 🚫 Lockout Check
-        // if (params.hasTradedToday || TpGoldOpeningBreakout.dailyTradeCount > 0) {
-        //     return { matched: false };
-        // }
+        if (params.hasTradedToday || TpGoldOpeningBreakout.dailyTradeCount > 0) {
+            return { matched: false };
+        }
 
-        // 🚀 FORCE ENTRY TEST MODE: Trigger a buy on every single candle
-        const instance = new TpGoldOpeningBreakout();
-        const trade = instance.createTrade(
-            c.close,
-            'buy',
-            c.close - 20, // SL 20 points below
-            c.time,
-            params
-        );
-        console.log(`[Gold-Test] 🎯 Forcing trade entry at ${c.close}`);
-        return { matched: true, trade };
-
-        /* 🟡 ORIGINAL LOGIC BELOW (DISABLED FOR TEST)
+        // 🟡 CAPTURE RANGE (3:45 AM → 4:00 AM) IST
         if (hour === 3 && minute === 45) {
             TpGoldOpeningBreakout.rangeHigh = c.high;
             TpGoldOpeningBreakout.rangeLow = c.low;
@@ -455,9 +443,7 @@ export class TpGoldOpeningBreakout implements Strategy {
             console.log(`[Gold-Live] 🔔 PENDING ${direction.toUpperCase()} detected. Waiting for sweep of H:${c.high} L:${c.low}`);
         }
 
-        */
-
-        return { matched: false };
+        return { matched: false }; // We only return matched:true in checkPendingBreakout
     }
 
     public static checkPendingBreakout(candle: Candle, params: any): { matched: boolean, trade?: Trade } {
@@ -556,4 +542,3 @@ export class TpGoldOpeningBreakout implements Strategy {
         return trs.reduce((a, b) => a + b, 0) / (trs.length || 1);
     }
 }
-
