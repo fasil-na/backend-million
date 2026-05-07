@@ -203,10 +203,10 @@ export class GoldOpeningBreakout implements Strategy {
                 ? entry - offset
                 : entry + offset;
 
-        // 🎯 Apply Precision
-        const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
-        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-XAU_USDT'] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        // 🎯 Apply Precision Dynamically from DB
+        const pair = params.pair || 'B-XAU_USDT';
+        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
         sl = Number(sl.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {
@@ -252,10 +252,10 @@ export class GoldOpeningBreakout implements Strategy {
         }
 
         if (trade.sl !== oldSL) {
-            // 🎯 Apply Precision to Trail
-            const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
-            const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-XAU_USDT'] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-            const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+            // 🎯 Apply Precision Dynamically from DB
+            const pair = params.pair || 'B-XAU_USDT';
+            const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+            const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
             trade.sl = Number(trade.sl!.toFixed(pricePrecision));
 
             trade.trailingCount = (trade.trailingCount || 0) + 1;

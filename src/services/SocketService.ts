@@ -467,9 +467,8 @@ export class SocketService {
             // If mode is 'minimal', we use the exchange's absolute minimum required ($6).
             let liveCapital = initialCapital;
             if (settings.isLiveTrading) {
-                const cleanS = (pair || '').replace('B-', '').toLowerCase();
-                const staticData = TradeService.STATIC_INSTRUMENTS[cleanS] || TradeService.STATIC_INSTRUMENTS[pair] || TradeService.STATIC_INSTRUMENTS['B-' + pair] || { minNotional: 6 };
-                const minNotional = staticData.minNotional || 6;
+                const exchangeData = TradeService.getInstrumentDetailsSync(pair || settings.pair);
+                const minNotional = exchangeData.minNotional || 6;
 
                 if (settings.riskMode === 'capital') {
                     liveCapital = settings.initialCapital || 100;

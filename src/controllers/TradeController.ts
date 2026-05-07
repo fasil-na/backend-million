@@ -47,6 +47,7 @@ export class TradeController {
             let calculatedSL = 0;
             if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
                 let atr = calculateATR(candleRes.data, 14);
+                
                 if (atr === 0 || atr < (entryPrice * 0.001)) {
                     atr = entryPrice * 0.01;
                 }
@@ -63,9 +64,9 @@ export class TradeController {
                 : entryPrice - (riskAmount * 1.9);
 
             const rawPair = activePair;
-            const staticData = TradeService.STATIC_INSTRUMENTS[rawPair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-            const minNotional = staticData.minNotional || 6;
-            const step = staticData.qtyStep;
+            const exchangeData = await TradeService.getInstrumentDetails(rawPair);
+            const minNotional = exchangeData.minNotional || 6;
+            const step = exchangeData.qtyStep || 0.001;
 
             // 🎯 RISK CALCULATION:
             let quantityNum = 0;
@@ -78,7 +79,7 @@ export class TradeController {
                 quantityNum = Math.ceil((minNotional / entryPrice) / step) * step;
             }
 
-            const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, calculatedTP, calculatedSL, side, entryPrice);
+            const formattedParams = await TradeService.formatTradeParams(rawPair, quantityNum, leverage, calculatedTP, calculatedSL, side, entryPrice);
          
             try {
                 const result = await executeWithRetry(() =>

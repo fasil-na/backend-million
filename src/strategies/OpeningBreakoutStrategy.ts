@@ -111,10 +111,10 @@ export class OpeningBreakoutStrategy implements Strategy {
                         const oldSL = trade.sl;
                         OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
 
-                        // 🎯 Round SL dynamically exactly like the Live execution does
-                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                        // 🎯 Apply Precision Dynamically from DB
+                        const pair = params.pair || 'B-BTC_USDT';
+                        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+                        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
                         trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
 
                         if (trade.sl !== oldSL) {
@@ -299,9 +299,9 @@ export class OpeningBreakoutStrategy implements Strategy {
         }
 
         // 🎯 Enforce Native Precision Rules on Entry Stop Loss
-        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        const pair = params.pair || 'B-BTC_USDT';
+        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
         sl = Number(sl.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {

@@ -79,25 +79,53 @@ export function formatPair(pair: string): string {
     return `B-${formatted}`;
 }
 
+export function calculateEMA(data: number[], period: number): number[] {
+    const k = 2 / (period + 1);
+    let ema = data[0] || 0;
+    const results = [ema];
+    for (let i = 1; i < data.length; i++) {
+        ema = (data[i] || 0) * k + ema * (1 - k);
+        results.push(ema);
+    }
+    return results;
+}
 
-// export function calculatePositionSize({
-//     capital,
-//     entryPrice,
-//     stopLossPrice,
-//     feePercent = 0.001 // 0.1%
-// }) {
-//     const riskAmount = (capital) / 100;
+export function calculateRSI(data: number[], period: number = 14): number[] {
+    const rsi: number[] = new Array(data.length).fill(0);
+    if (data.length <= period) return rsi;
 
-//     const stopDistance = Math.abs(entryPrice - stopLossPrice);
+    let gains = 0;
+    let losses = 0;
 
-//     if (stopDistance === 0) return 0;
+    for (let i = 1; i <= period; i++) {
+        const current = data[i];
+        const prev = data[i-1];
+        if (current === undefined || prev === undefined) continue;
+        const diff = current - prev;
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+    }
 
-//     // Raw quantity
-//     let qty = riskAmount / stopDistance;
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
 
-//     // Adjust for fees (entry + exit)
-//     const feeBuffer = 1 + feePercent * 2;
-//     qty = qty / feeBuffer;
+    for (let i = period + 1; i < data.length; i++) {
+        const current = data[i];
+        const prev = data[i-1];
+        if (current === undefined || prev === undefined) continue;
+        const diff = current - prev;
+        const gain = diff >= 0 ? diff : 0;
+        const loss = diff < 0 ? -diff : 0;
 
-//     return qty;
-// }
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+        if (avgLoss === 0) rsi[i] = 100;
+        else {
+            const rs = avgGain / avgLoss;
+            rsi[i] = 100 - (100 / (1 + rs));
+        }
+    }
+
+    return rsi;
+}

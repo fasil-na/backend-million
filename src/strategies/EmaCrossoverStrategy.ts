@@ -68,9 +68,10 @@ export class EmaCrossoverStrategy implements Strategy {
                     if (trailingSL) {
                         EmaCrossoverStrategy.updateTrailingSL(trade, sc);
                         // 🎯 Round SL dynamically
-                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+                        // 🎯 Apply Precision Dynamically from DB
+                        const pair = params.pair || 'B-BTC_USDT';
+                        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+                        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
                         trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
                     }
 
@@ -232,9 +233,10 @@ export class EmaCrossoverStrategy implements Strategy {
         }
 
         // 🎯 Enforce Native Precision Rules on Entry Stop Loss
-        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        // 🎯 Enforce Native Precision Rules on Entry Stop Loss
+        const pair = params.pair || 'B-BTC_USDT';
+        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
         sl = Number(sl.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {
