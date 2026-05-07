@@ -257,7 +257,7 @@ export class TpGoldOpeningBreakout implements Strategy {
             }
 
             // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
-            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount === 0) {
+            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount <= 10) {
                 // 🚫 DO NOT enter new trades after 11:30 PM IST to avoid end-of-day carryover
                 if (hour === 23 && minute >= 30) {
                     continue;
@@ -503,15 +503,15 @@ export class TpGoldOpeningBreakout implements Strategy {
 
         console.log(`[Gold-Trade] 🛠️ Creating ${direction} trade. Entry:${entryPrice}, SL-Price:${slPrice}, Risk:${risk.toFixed(2)}, TP-Target:${tp.toFixed(2)}`);
 
-        // 🎯 Apply Precision
-        const cleanPair = (params.pair || 'B-XAU_USDT').replace('B-', '').toLowerCase();
-        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-XAU_USDT'] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        // 🎯 Apply Precision Dynamically from DB
+        const pair = params.pair || 'B-XAU_USDT';
+        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
+        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
 
         let sl = Number(slPrice.toFixed(pricePrecision));
         tp = Number(tp.toFixed(pricePrecision));
 
-        const units = 0.01;
+        const units = 0.001;
 
         return {
             entryTime: dayjs(timeMs).tz('Asia/Kolkata').toISOString(),

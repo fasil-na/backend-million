@@ -41,6 +41,10 @@ const start = async () => {
 
         // Start services
         SocketService.init(server);
+        
+        // 🔄 DYNAMIC INSTRUMENT SYNC: Fetch latest exchange constraints (leverage, precision, etc.)
+        const { TradeService } = await import('./services/TradeService.js');
+        TradeService.syncInstruments().catch(err => console.error('[Startup] ❌ Instrument sync failed:', err.message));
 
         // 🧪 TEST ERROR: Verify logging system works
         await SystemLogService.log('ERROR', 'System', 'PROD_TEST: Log integration successful. Monitoring 24/7 active.');
