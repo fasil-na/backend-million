@@ -4,7 +4,8 @@ import { SystemLogService } from '../services/SystemLogService.js';
 export class SystemLogController {
     static async getLogs(req: Request, res: Response) {
         try {
-            const logs = await SystemLogService.getRecentLogs(200);
+            const { level } = req.query;
+            const logs = await SystemLogService.getRecentLogs(200, level as string);
             res.json(logs);
         } catch (error: any) {
             res.status(500).json({ error: error.message });

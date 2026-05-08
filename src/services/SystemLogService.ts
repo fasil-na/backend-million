@@ -22,8 +22,12 @@ export class SystemLogService {
         }
     }
 
-    static async getRecentLogs(limit = 100) {
-        return await SystemLogModel.find().sort({ createdAt: -1 }).limit(limit).lean();
+    static async getRecentLogs(limit = 100, level?: string) {
+        const query: any = {};
+        if (level && level !== 'ALL') {
+            query.level = level;
+        }
+        return await SystemLogModel.find(query).sort({ createdAt: -1 }).limit(limit).lean();
     }
 
     static async clearLogs() {
