@@ -4,8 +4,8 @@ import dayjs from 'dayjs';
 export class SystemLogService {
     static async log(level: 'INFO' | 'WARN' | 'ERROR', source: string, message: string, details?: any) {
         try {
-            // 🛡️ DATABASE FILTER: Only save critical ERRORS to the DB to keep it clean.
-            if (level === 'ERROR') {
+            // 🛡️ DATABASE FILTER: Save INFO and ERROR logs to the DB for production debugging.
+            if (level === 'ERROR' || level === 'INFO' || level === 'WARN') {
                 const logEntry = new SystemLogModel({
                     timestamp: dayjs().toISOString(),
                     level,

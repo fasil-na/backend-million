@@ -257,7 +257,15 @@ export class TpGoldOpeningBreakout implements Strategy {
             }
 
             // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
-            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount <= 10) {
+            // Use last candle's high and low for dynamic testing
+            const prevCandleForRange = candles[i - 1];
+            if (!prevCandleForRange) continue;
+
+            rangeHigh = prevCandleForRange.high;
+            rangeLow = prevCandleForRange.low;
+            rangeCaptured = true;
+
+            if (!currentTrade && !pendingBreakout && rangeCaptured && rangeHigh && rangeLow && dailyTradeCount < 1000) {
                 // 🚫 DO NOT enter new trades after 11:30 PM IST to avoid end-of-day carryover
                 if (hour === 23 && minute >= 30) {
                     continue;
@@ -366,8 +374,8 @@ export class TpGoldOpeningBreakout implements Strategy {
         const hour = time.hour();
         const minute = time.minute();
 
-        // 🚫 Lockout Check
-        if (params.hasTradedToday || TpGoldOpeningBreakout.dailyTradeCount > 0) {
+        // 🚫 Lockout Check (Allowed 1000 trades per day)
+        if (params.hasTradedToday || TpGoldOpeningBreakout.dailyTradeCount >= 1000) {
             return { matched: false };
         }
 
@@ -391,6 +399,14 @@ export class TpGoldOpeningBreakout implements Strategy {
         }
 
         // 🟢 ENTRY LOGIC (IDENTIFY BREAKOUT)
+        // Use last candle's high and low for dynamic testing
+        const prevCandleForRange = candles[i - 1];
+        if (!prevCandleForRange) return { matched: false };
+
+        TpGoldOpeningBreakout.rangeHigh = prevCandleForRange.high;
+        TpGoldOpeningBreakout.rangeLow = prevCandleForRange.low;
+        TpGoldOpeningBreakout.rangeCaptured = true;
+
         if (!TpGoldOpeningBreakout.rangeCaptured || TpGoldOpeningBreakout.pendingBreakout) {
             return { matched: false };
         }

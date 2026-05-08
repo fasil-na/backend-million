@@ -28,8 +28,7 @@ export function calculateTradeProfit(
     exitPrice: number,
     feeRate: number
 ) {
-    // ✅ Key fix — convert lots to oz
-    const units = (trade.units || 0) * 100;  // 0.01 × 100 = 1 oz
+    const units = trade.units || 0;
 
     const grossProfit = trade.direction === 'buy'
         ? (exitPrice - trade.entryPrice) * units

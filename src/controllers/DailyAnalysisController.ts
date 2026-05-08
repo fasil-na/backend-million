@@ -24,7 +24,7 @@ export class DailyAnalysisController {
             const fetchStart = simStart - (7 * 24 * 60 * 60);
 
             const [resMain, resSub] = await Promise.all([
-                CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: simEnd, resolution: '15' }),
+                CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: simEnd, resolution: '1' }),
                 CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: simEnd, resolution: '1' }).catch(() => ({ s: 'error', data: [] }))
             ]);
 
