@@ -151,13 +151,17 @@ export class SocketService {
                 this.candleIndexMap.clear();
                 this.lastPair = settings.pair;
                 this.lastResolution = settings.timeInterval;
-
                 console.log(`[Lifecycle] 🔄 Resolution/Pair changed: ${settings.pair} ${settings.timeInterval}m. Clearing buffer.`);
             }
 
             // --- RESOLUTION PARTITIONING ---
             const incomingResolution = (data as any).resolution || '1';
             const isMainResolution = incomingResolution === settings.timeInterval;
+
+            // Log candle arrival occasionally or for specific events
+            if (this.candles.length === 0) {
+                SystemLogService.log('INFO', 'LIFECYCLE', `First candle received for ${incomingPair} (${incomingResolution}m). Starting buffer.`);
+            }
 
             // 1. Monitor Price always (every tick/candle)
             if (settings.activeTradeStatus === 'open') {
@@ -171,8 +175,10 @@ export class SocketService {
                 if (strategy.constructor?.checkPendingBreakout) {
                     const result = strategy.constructor.checkPendingBreakout(data, settings);
                     if (result.matched && result.trade) {
-                        console.log(`[Gold] 🚀 Pending Breakout Triggered on 1m candle!`);
-                        this.executeSignal(result.trade, settings).catch(err => console.error('[Signal] ❌ Execute Error:', err.message));
+                        SystemLogService.log('INFO', 'STRATEGY', `🚀 Gold Pending Breakout Triggered on 1m candle! Entry: ${result.trade.entryPrice}`);
+                        this.executeSignal(result.trade, settings).catch(err => {
+                            SystemLogService.log('ERROR', 'EXECUTION', `Failed to execute Gold breakout signal: ${err.message}`, { error: err });
+                        });
                     }
                 }
             }
@@ -217,10 +223,12 @@ export class SocketService {
                         const currentTime = new Date(closedCandle.time);
                         if (currentTime.getMinutes() % intervalMinutes === 0) {
                             if (!this.isStrategyRunning) {
-                                console.log(`[Lifecycle] 🚀 ${intervalMinutes}m Interval Reached. Running Strategy scan...`);
+                                SystemLogService.log('INFO', 'STRATEGY', `🚀 ${intervalMinutes}m Interval Reached. Running Strategy scan for ${settings.pair}...`);
                                 this.isStrategyRunning = true;
                                 this.executeLiveStrategy()
-                                    .catch(err => console.error('[Strategy] ❌ Scan Error:', err.message))
+                                    .catch(err => {
+                                        SystemLogService.log('ERROR', 'STRATEGY', `Strategy scan failed: ${err.message}`, { error: err });
+                                    })
                                     .finally(() => this.isStrategyRunning = false);
                             }
                         }
@@ -270,10 +278,15 @@ export class SocketService {
             let isActive = !!pos && pos.active_pos !== 0;
 
             if (posList.length > 0 && !pos) {
-                console.log(`[Position Debug] Received ${posList.length} positions, but none matched ${pair}. Items:`, JSON.stringify(posList));
+                // SystemLogService.log('INFO', 'POSITION', `Received ${posList.length} positions, but none matched ${pair}. Items:`, { posList });
             }
 
-            if (isActive) this.currentPosition = pos;
+            if (isActive) {
+                if (!wasActive) {
+                    SystemLogService.log('INFO', 'POSITION', `New position detected for ${pair} at ${pos.entry_price}`);
+                }
+                this.currentPosition = pos;
+            }
 
             // --- ENHANCED PROTECTION AGAINST PHANTOM CLOSURES ---
             if (wasActive && !isActive) {
@@ -472,12 +485,12 @@ export class SocketService {
 
                 if (settings.riskMode === 'capital') {
                     liveCapital = settings.initialCapital || 100;
-                    console.log(`[Strategy] 💰 Capital Mode: Using $${liveCapital} of capital at ${leverage}x leverage.`);
+                    SystemLogService.log('INFO', 'RISK', `💰 Capital Mode: Using $${liveCapital} of capital at ${leverage}x leverage.`);
                 } else {
                     // Minimal Mode: Safety buffer 110% of minimum
                     const safeNotional = minNotional * 1.10;
                     liveCapital = safeNotional / leverage;
-                    console.log(`[Strategy] 🛡️ Minimal Mode: Scaling down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional.`);
+                    SystemLogService.log('INFO', 'RISK', `🛡️ Minimal Mode: Scaling down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional.`);
                 }
             }
 
@@ -498,8 +511,86 @@ export class SocketService {
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 this.lastSignalTime = latestCandle.time;
-                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction.toUpperCase()} for ${pair} detected. Initializing execution...`);
-                await this.executeSignal(latest, settings);
+                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
+                this.io.emit('strategy-signal', { pair, trade: latest });
+
+                const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
+                const tradeType = isRealTrade ? 'real' : 'paper';
+
+                if (isRealTrade) {
+                    if (this.isPlacingOrder) {
+                        SystemLogService.log('WARN', 'EXECUTION', `Order already in progress for ${pair}. Skipping duplicate entry.`);
+                        return;
+                    }
+                    this.isPlacingOrder = true;
+                    try {
+                        SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL entry for ${pair} (${latest.direction}) at ${latest.entryPrice}...`);
+                        await TradeService.executeFutureOrder({
+                            ...latest,
+                            stop_loss_price: latest.sl
+                        });
+
+                        await new Promise(res => setTimeout(res, 1000));
+
+                        const positions = await TradeService.getPositions();
+                        const newPos = Array.isArray(positions)
+                            ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
+                            : null;
+
+                        if (newPos) {
+                            this.currentPosition = newPos;
+                            SystemLogService.log('INFO', 'EXECUTION', `✅ REAL Entry Verified for ${pair}. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
+                        } else {
+                            SystemLogService.log('WARN', 'EXECUTION', `⚠️ Order placed for ${pair} but no active position found on exchange after 1s. Check exchange logs.`);
+                        }
+
+                        await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                        this.io.emit('settings-update', SettingsService.getSettings());
+
+                        const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
+                        await TradeHistoryService.saveTrade({
+                            ...latest,
+                            pair,
+                            direction: latest.direction,
+                            entryPrice: entryPrice,
+                            status: 'open',
+                            type: 'real',
+                            entryTime: new Date().toISOString()
+                        });
+                    } catch (err: any) {
+                        const errorMessage = err.response?.data?.message || err.message;
+                        SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Execution Failed for ${pair}: ${errorMessage}`, { error: err.response?.data || err });
+                        await TradeHistoryService.saveTrade({
+                            ...latest,
+                            pair,
+                            direction: latest.direction,
+                            entryPrice: latest.entryPrice,
+                            status: 'failed',
+                            type: 'real',
+                            profit: 0,
+                            entryTime: new Date().toISOString(),
+                            executionError: errorMessage
+                        });
+                    } finally {
+                        this.isPlacingOrder = false;
+                    }
+                } else {
+                    // PAPER TRADE LOGIC
+                    SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER entry for ${pair} (${latest.direction})...`);
+
+                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                    this.io.emit('settings-update', SettingsService.getSettings());
+
+                    await TradeHistoryService.saveTrade({
+                        ...latest,
+                        pair,
+                        direction: latest.direction,
+                        entryPrice: latest.entryPrice,
+                        status: 'open',
+                        type: 'paper',
+                        entryTime: new Date().toISOString()
+                    });
+                }
             } else {
                 console.log('[Strategy] 🧊 No signal found on this candle.');
                 // SystemLogService.log('INFO', 'STRATEGY', `Scan complete: No signal found for ${pair}`);
@@ -520,10 +611,13 @@ export class SocketService {
         const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
 
         if (isRealTrade) {
-            if (this.isPlacingOrder) return;
+            if (this.isPlacingOrder) {
+                SystemLogService.log('WARN', 'EXECUTION', `Order already in progress for ${pair}. Skipping signal execute.`);
+                return;
+            }
             this.isPlacingOrder = true;
             try {
-                console.log(`[Strategy] 🚀 Executing REAL entry for ${pair}...`);
+                SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL SIGNAL entry for ${pair} (${latest.direction}) at ${latest.entryPrice}...`);
                 await TradeService.executeFutureOrder({
                     ...latest,
                     stop_loss_price: latest.sl,
@@ -539,7 +633,9 @@ export class SocketService {
 
                 if (newPos) {
                     this.currentPosition = newPos;
-                    console.log(`[Strategy] ✅ REAL Entry Verified. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
+                    SystemLogService.log('INFO', 'EXECUTION', `✅ REAL Signal Entry Verified for ${pair}. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
+                } else {
+                    SystemLogService.log('WARN', 'EXECUTION', `⚠️ Signal order placed for ${pair} but no active position found on exchange after 1s.`);
                 }
 
                 await SettingsService.saveSettings({ activeTradeStatus: 'open' });
@@ -557,8 +653,7 @@ export class SocketService {
                 });
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;
-                console.error('[Strategy] ❌ REAL Execution Failed:', errorMessage);
-                SystemLogService.log('ERROR', 'STRATEGY', `REAL Execution Failed: ${errorMessage}`);
+                SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Signal Execution Failed for ${pair}: ${errorMessage}`, { error: err.response?.data || err });
                 await TradeHistoryService.saveTrade({
                     ...latest,
                     pair,
@@ -576,6 +671,10 @@ export class SocketService {
         } else {
             try {
                 console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
+                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+                this.io.emit('settings-update', SettingsService.getSettings());
+                // PAPER TRADE LOGIC
+                SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER SIGNAL entry for ${pair} (${latest.direction})...`);
                 await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                 this.io.emit('settings-update', SettingsService.getSettings());
 
@@ -622,6 +721,7 @@ export class SocketService {
 
             if (exitReason) {
                 const triggerPrice = exitReason === 'SL' ? sl : tp;
+                SystemLogService.log('INFO', 'MONITOR', `🎯 ${exitReason} Triggered at ${tick.close} (Trigger: ${triggerPrice}) for ${activeTrade.pair}`);
 
                 if (activeTrade.type === 'real' && !this.isClosingPosition) {
                     this.isClosingPosition = true;
@@ -638,12 +738,14 @@ export class SocketService {
                         }
 
                         if (pos) {
-                            console.log(`[Monitor] 🚀 Immediate Ticket-Based Exit for ${pair} (ID: ${pos.id})`);
+                            SystemLogService.log('INFO', 'EXECUTION', `🚀 Closing real position ${pos.id} for ${pair} due to ${exitReason} hit.`);
                             await TradeService.closePosition({ positionId: pos.id });
+                            SystemLogService.log('INFO', 'EXECUTION', `✅ Position ${pos.id} closed successfully.`);
+                        } else {
+                            SystemLogService.log('WARN', 'EXECUTION', `⚠️ ${exitReason} hit for real trade, but no active position found on exchange to close.`);
                         }
                     } catch (err: any) {
-                        console.error("[Monitor] ❌ Real exit failed:", err.message);
-                        SystemLogService.log('ERROR', 'MONITOR', `Real exit failed for ${settings.pair}: ${err.message}`);
+                        SystemLogService.log('ERROR', 'EXECUTION', `❌ Real exit failed for ${activeTrade.pair}: ${err.message}`, { error: err });
                     }
                 }
 
@@ -673,7 +775,7 @@ export class SocketService {
      * Reconstructs the current day's trade history (from 00:00) 
      * by running a dedicated backtest on the strategy.
      */
-    static async recoverTodayTrades() {
+    static async recoverTodayTrades(type: 'paper' | 'recovery' = 'paper') {
         try {
             const settings = SettingsService.getSettings();
             const pair = settings.pair;
@@ -760,7 +862,20 @@ export class SocketService {
                         console.log(`[Recovery] ⏭️ Skipping recovery for ${pair} at ${t.entryTime} (Real/Paper trade found)`);
                         continue;
                     }
-                    await TradeHistoryService.saveTrade({ ...t, pair, type: 'recovered' });
+
+                    console.log(`[Recovery] 💾 Saving trade for ${pair} at ${t.entryTime}. Trails found: ${t.trailingHistory?.length || 0}`);
+
+                    if (t.trailingHistory && t.trailingHistory.length > 0) {
+                        console.log(`[Recovery] 🔍 First trail sample: SL=${t.trailingHistory[0].sl}, Market=${t.trailingHistory[0].marketPrice}`);
+                    }
+
+
+                    await TradeHistoryService.saveTrade({
+                        ...t,
+                        pair,
+                        type: type,
+                        status: 'closed'
+                    });
                 }
             }
             console.log(`[Recovery] ✅ History recovery complete for ${pair}.`);

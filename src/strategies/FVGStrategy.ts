@@ -26,9 +26,9 @@ export class FVGStrategy implements Strategy {
     } {
         const trades: Trade[] = [];
         let balance = params.capital || 250;
-        const rr = params.riskRewardRatio || 3.8;
-        const riskAmount = params.riskAmount || 5; // Fixed risk amount per trade
-        const fvgExpiryCandles = 30; // Max candles to wait for return (Reduced for Freshness)
+        const rr = params.riskRewardRatio || 3.9; // Updated to 1:3.9 RR
+        const riskAmount = params.riskAmount || 5; // Fixed $5 risk per trade
+        const fvgExpiryCandles = 50; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 50; // Lookback for Premium/Discount zone
 
         // --- MOMENTUM & TREND PRE-CALCULATION ---
@@ -101,15 +101,17 @@ export class FVGStrategy implements Strategy {
                     activeTrade.exitTime = new Date(curr.time).toISOString();
                     
                     if (hitSL) {
-                        activeTrade.exitPrice = isBuy ? Math.min(curr.open, activeTrade.sl || 0) : Math.max(curr.open, activeTrade.sl || Infinity);
+                        // Fixed $5 concept: exit exactly at SL price
+                        activeTrade.exitPrice = activeTrade.sl || (isBuy ? curr.low : curr.high);
                         activeTrade.exitReason = "Stop Loss";
                     } else if (hitTP) {
-                        activeTrade.exitPrice = activeTrade.tp || curr.close;
+                        // Fixed RR concept: exit exactly at TP price
+                        activeTrade.exitPrice = activeTrade.tp || (isBuy ? curr.high : curr.low);
                         activeTrade.exitReason = "Take Profit";
                     }
                     
                     const units = activeTrade.units || 0;
-                    const feeRate = 0.0005; // 0.05% per side (Maker/Taker average)
+                    const feeRate = 0; // Fees set to 0 for the "Fixed $5" concept
                     
                     let grossProfit = 0;
                     if (isBuy) {

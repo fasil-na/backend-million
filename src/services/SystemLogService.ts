@@ -13,7 +13,7 @@ export class SystemLogService {
                 details
             });
             await logEntry.save();
-            
+
             // Log everything to terminal for immediate viewing
             const icon = level === 'ERROR' ? '🚨' : level === 'WARN' ? '⚠️' : 'ℹ️';
             console.log(`[${icon} ${source}] ${message}`);

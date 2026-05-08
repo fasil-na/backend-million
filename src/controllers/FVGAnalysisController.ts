@@ -19,9 +19,9 @@ export class FVGAnalysisController {
             const simStart = Math.floor(targetDay.startOf('day').valueOf() / 1000);
             const simEnd = Math.floor(targetDay.endOf('day').valueOf() / 1000);
             
-            // Warmup for FVG (need some previous candles to detect gaps)
-            const fetchStart = simStart - (24 * 60 * 60);
-// ***
+            // Match Backtest warmup (7 days) for indicator stability (EMA200 etc)
+            const fetchStart = simStart - (7 * 24 * 60 * 60);
+            
             const [resMain] = await Promise.all([
                 CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: simEnd, resolution: '5' })
             ]);
@@ -47,8 +47,9 @@ export class FVGAnalysisController {
             if (strategy) {
                 const result = strategy.run(candles, {
                     capital: Number(req.query.capital) || 1000,
-                    riskRewardRatio: Number(req.query.rr) || undefined, // Allow strategy default
-                    riskAmount: Number(req.query.riskAmount) || undefined, // Allow strategy default
+                    riskRewardRatio: Number(req.query.rr) || undefined,
+                    riskAmount: Number(req.query.riskAmount) || undefined,
+                    simulationStartUnix: simStart,
                     type: 'backtest'
                 });
 
