@@ -386,6 +386,7 @@ export class SocketService {
 
     private static async executeLiveStrategy() {
         try {
+             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-1');
             const settings = SettingsService.getSettings();
 
             // 1. Fetch latest trade to check status
@@ -403,16 +404,17 @@ export class SocketService {
                 SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: ActiveTradeStatus is 'open' in settings`);
                 return;
             }
-
+ 
             const pair = settings.pair;
             const latestCandle = this.candles[this.candles.length - 1];
-
+                       SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-2');
             if (!latestCandle) return;
 
             // 🛑 GUARD: Prevent multiple entries for the same candle (Real vs Paper race)
             if (this.lastSignalTime === latestCandle.time) {
                 return;
-            }
+            }        
+                 SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-3');
 
             const leverage = settings.leverage;
             const initialCapital = settings.initialCapital;
@@ -440,7 +442,7 @@ export class SocketService {
                     SystemLogService.log('ERROR', 'STRATEGY', `Failed to fetch candlesticks for ${pair}: ${response.message || 'Unknown error'}`);
                 }
             }
-
+             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-4');
             if (this.candles.length === 0) {
                 console.warn('[Strategy] ❌ No data available for analysis. Skipping cycle.');
                 SystemLogService.log('ERROR', 'STRATEGY', `Scan aborted: No candle data available for ${pair}`);
@@ -456,16 +458,18 @@ export class SocketService {
                 SystemLogService.log('ERROR', 'STRATEGY', `CRITICAL: Unknown strategy ID: ${selectedStrategyId}`);
                 return;
             }
-
+             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-5');
             // 3. One last safety sync with exchange
             const cleanS = (pair || '').replace('B-', '').toLowerCase();
             if (settings.isLiveTrading) {
+                             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-6');
                 const positions = await TradeService.getPositions();
                 const livePos = Array.isArray(positions)
                     ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
                     : null;
 
                 if (livePos) {
+                                 SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-7');
                     console.log(`[Strategy] 🚑 Exchange has active position. Syncing local state ONLY.`);
                     SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Exchange has active position for ${pair}`);
                     this.currentPosition = livePos;
@@ -480,6 +484,7 @@ export class SocketService {
             // If mode is 'minimal', we use the exchange's absolute minimum required ($6).
             let liveCapital = initialCapital;
             if (settings.isLiveTrading) {
+                             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-8');
                 const exchangeData = TradeService.getInstrumentDetailsSync(pair || settings.pair);
                 const minNotional = exchangeData.minNotional || 6;
 
@@ -493,7 +498,7 @@ export class SocketService {
                     SystemLogService.log('INFO', 'RISK', `🛡️ Minimal Mode: Scaling down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional.`);
                 }
             }
-
+             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-9');
             // 4. Run Strategy Check
             const hasTradedToday = await TradeHistoryService.hasTradedToday(pair);
             console.log(`[Strategy] 🔍 Scanning ${this.candles.length} candles for '${selectedStrategyId}' signal... ${hasTradedToday ? '(Lockout Active)' : ''}`);
@@ -508,6 +513,7 @@ export class SocketService {
                 hasTradedToday // 🛡️ One-and-Done Lockout for OpeningBreakout
             });
             console.log(result, 'result---')
+                         SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-10');
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 this.lastSignalTime = latestCandle.time;
@@ -593,6 +599,7 @@ export class SocketService {
                 }
             } else {
                 console.log('[Strategy] 🧊 No signal found on this candle.');
+                             SystemLogService.log('WARN', 'STRATEGY','executeLiveStrategy setp-11');
                 // SystemLogService.log('INFO', 'STRATEGY', `Scan complete: No signal found for ${pair}`);
             }
         } catch (err: any) {
