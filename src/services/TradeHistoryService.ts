@@ -22,22 +22,14 @@ export class TradeHistoryService {
             throw new Error("Database connection error");
         }
         try {
-            // 🛡️ HARDWARE-LEVEL CAPTURE: Explicitly extract the history array
-            // to ensure it is not stripped by destructuring or cloning.
-            const rawTrade: any = trade;
-            const historyToSave = rawTrade.trailingHistory || [];
-            
             const cleanData = JSON.parse(JSON.stringify(trade));
             const { _id, __v, ...updateData } = cleanData;
             
-            // Re-attach explicitly
-            updateData.trailingHistory = historyToSave;
-
             if (!updateData.entryTime) {
               updateData.entryTime = new Date().toISOString();
             }
 
-            console.log(`📡 DB ATTEMPT: ${updateData.pair} @ ${updateData.entryTime}. Count: ${updateData.trailingCount}, History Items: ${updateData.trailingHistory?.length || 0}`);
+            console.log(`📡 DB ATTEMPT: ${updateData.pair} @ ${updateData.entryTime}.`);
 
             const result = await TradeModel.findOneAndUpdate(
                 { entryTime: updateData.entryTime },
@@ -56,10 +48,12 @@ export class TradeHistoryService {
         await this.saveTrade(trade);
     }
 
-    static async getActiveTrade(): Promise<Trade | null> {
+    static async getActiveTrade(configId?: string): Promise<Trade | null> {
         if (mongoose.connection.readyState !== 1) return null;
         try {
-            const trade = await TradeModel.findOne({ status: 'open' }).sort({ entryTime: -1 }).lean();
+            const query: any = { status: 'open' };
+            if (configId) query.configId = configId;
+            const trade = await TradeModel.findOne(query).sort({ entryTime: -1 }).lean();
             return trade as Trade | null;
         } catch (e) {
             console.error("Error getting active trade from MongoDB:", e);
@@ -89,18 +83,23 @@ export class TradeHistoryService {
         }
     }
 
-    static async hasTradedToday(pair: string): Promise<boolean> {
+    static async hasTradedToday(pair: string, strategyId?: string, configId?: string): Promise<boolean> {
         if (mongoose.connection.readyState !== 1) return false;
         try {
             const dayStart = new Date();
             dayStart.setHours(0, 0, 0, 0);
             
-            const count = await TradeModel.countDocuments({
+            const query: any = {
                 pair,
                 entryTime: { $gte: dayStart.toISOString() },
-                type: { $in: ['real', 'paper', 'recovery'] }, // Include recovery trades!
-                status: { $ne: 'failed' } // Don't count failed attempts as a "used" slot
-            });
+                type: { $in: ['real', 'paper', 'recovery'] },
+                status: { $ne: 'failed' }
+            };
+
+            if (configId) query.configId = configId;
+            else if (strategyId) query.strategyId = strategyId;
+
+            const count = await TradeModel.countDocuments(query);
             
             return count > 0;
         } catch (e) {

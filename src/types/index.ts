@@ -15,21 +15,20 @@ export interface Trade {
     status: 'open' | 'closed' | 'failed';
     profit: number;
     exitReason?: string | undefined;
-    lastHigh?: number | undefined;
-    lastLow?: number | undefined;
     units?: number | undefined; 
     fee?: number | undefined;
     pnlPercent?: number | undefined;
-    trailingCount?: number | undefined;
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
+    strategyId?: string | undefined;
+    configId?: string | undefined;
     executionError?: string | undefined;
     indicators?: any;
-    trailingHistory?: {
-        sl: number;
-        marketPrice: number;
-        time: string;
-    }[] | undefined;
+    // Legacy Trailing SL fields
+    lastHigh?: number | undefined;
+    lastLow?: number | undefined;
+    trailingCount?: number | undefined;
+    trailingHistory?: any[] | undefined;
 }
 
 export interface Candle {

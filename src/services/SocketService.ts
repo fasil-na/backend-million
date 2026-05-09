@@ -15,6 +15,20 @@ import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 import { PriceStore } from './PriceStore.js';
 import { SystemLogService } from './SystemLogService.js';
 import mongoose from 'mongoose';
+import { LiveConfigService } from './LiveConfigService.js';
+import type { ILiveConfig } from '../models/LiveConfig.js';
+
+interface LiveState {
+    config: any;
+    candles: Candle[];
+    candleIndexMap: Map<number, number>;
+    currentPosition: Position | null;
+    isStrategyRunning: boolean;
+    isPlacingOrder: boolean;
+    isClosingPosition: boolean;
+    lastProcessedCandleTime: number | null;
+    lastSignalTime: number | null;
+}
 
 export class SocketService {
     private static io: SocketIOServer;
@@ -29,12 +43,14 @@ export class SocketService {
     private static lastProcessedCandleTime: number | null = null;
     private static lastSignalTime: number | null = null;
 
+    private static configStates = new Map<string, LiveState>();
+
     public static getIO() {
         return SocketService.io;
     }
 
 
-    static init(server: HTTPServer) {
+    static async init(server: HTTPServer) {
         SocketService.io = new SocketIOServer(server, {
             cors: {
                 origin: '*',
@@ -44,7 +60,6 @@ export class SocketService {
             pingInterval: 25000,
             pingTimeout: 60000,
         });
-        const settings = SettingsService.getSettings();
 
         SocketService.io.on('connection', (socket) => {
             console.log('Frontend connected:', socket.id);
@@ -59,25 +74,55 @@ export class SocketService {
         SocketService.setupCoinDCXListeners();
         coinDCXSocket.connect();
 
+        // Initialize enabled configurations
+        try {
+            const configs = await LiveConfigService.getEnabledConfigs();
+            console.log(`[Lifecycle] 🚀 Found ${configs.length} enabled live configurations.`);
+            for (const config of configs) {
+                SocketService.addConfigState(config);
+            }
+        } catch (err: any) {
+            console.error('[Lifecycle] ❌ Failed to load live configs:', err.message);
+        }
+
         coinDCXSocket.on('connected', () => {
             const s = SettingsService.getSettings();
-            // ALWAYS subscribe to 1m for fast trailing SL updates
-            const channel = SocketService.formatChannel(s.pair, '1');
-            console.log(`[Self-Healing] 🔄 Socket reconnected. Synchronizing state...`);
-            coinDCXSocket.subscribe(channel);
+            // Legacy subscription
+            coinDCXSocket.subscribe(SocketService.formatChannel(s.pair, '1'));
+            
+            // Subscriptions for all active configs
+            for (const state of SocketService.configStates.values()) {
+                coinDCXSocket.subscribe(SocketService.formatChannel(state.config.pair, state.config.timeInterval));
+                coinDCXSocket.subscribe(SocketService.formatChannel(state.config.pair, '1'));
+            }
 
-            // 🛡️ RECOVERY SYNC: Fetch current exchange status to ensure no desync
+            console.log(`[Self-Healing] 🔄 Socket reconnected. Synchronizing state...`);
             SocketService.syncExchangeState().catch(err => console.error('[Sync] ❌ Recovery Failed:', err.message));
         });
+    }
 
+    private static addConfigState(config: any) {
+        const id = config._id.toString();
+        if (SocketService.configStates.has(id)) return;
 
-        // if (settings.isLiveTrading) {
-        //     const marginCurrency = settings.pair.includes('USDT') ? 'USDT' : 'INR';
-
-        //     // await TradeService.syncLiveBalance(marginCurrency)
-        //         .then(() => console.log('✅ Initial live balance synced'))
-        //         .catch(err => console.error('❌ Initial balance sync failed', err));
-        // }
+        SocketService.configStates.set(id, {
+            config,
+            candles: [],
+            candleIndexMap: new Map(),
+            currentPosition: null,
+            isStrategyRunning: false,
+            isPlacingOrder: false,
+            isClosingPosition: false,
+            lastProcessedCandleTime: null,
+            lastSignalTime: null
+        });
+        console.log(`[Lifecycle] ✅ Initialized state for config: ${config.strategyId} on ${config.pair}`);
+        
+        // Subscribe if socket is already connected
+        if (coinDCXSocket.isConnected?.()) {
+            coinDCXSocket.subscribe(SocketService.formatChannel(config.pair, config.timeInterval));
+            coinDCXSocket.subscribe(SocketService.formatChannel(config.pair, '1'));
+        }
     }
 
     private static formatChannel(pair: string, resolution: string = DEFAULT_RESOLUTION) {
@@ -89,148 +134,104 @@ export class SocketService {
      * 🛡️ SELF-HEALING: Synchronizes the local bot state with the exchange reality.
      * Prevents the bot from getting stuck in "Open" if a trade closed while server was away.
      */
-    private static async syncExchangeState() {
+    private static async syncPositionsWithExchange() {
         try {
-            const settings = SettingsService.getSettings();
-            const pair = settings.pair;
-            const cleanS = (pair || '').replace('B-', '').toLowerCase();
-
-            console.log(`[Sync] 🔍 Checking exchange status for ${pair}...`);
-
             const positions = await TradeService.getPositions();
-            const livePos = Array.isArray(positions)
-                ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
-                : null;
+            console.log(`[Sync] 🔍 Checking exchange status for ${SocketService.configStates.size} configs...`);
 
-            if (livePos) {
-                SystemLogService.log('INFO', 'SYNC', `✅ Active position found: ${pair} @ ${livePos.entry_price}`);
-                SocketService.currentPosition = livePos;
-                if (settings.activeTradeStatus !== 'open') {
-                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                    SocketService.io.emit('settings-update', SettingsService.getSettings());
-                }
-            } else {
-                SocketService.currentPosition = null;
-                if (settings.activeTradeStatus === 'open') {
-                    SystemLogService.log('WARN', 'SYNC', `🚑 Desync fixed: Exchange is FLAT, closing local status for ${pair}.`);
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    SocketService.io.emit('settings-update', SettingsService.getSettings());
+            for (const [id, state] of SocketService.configStates.entries()) {
+                const pair = state.config.pair;
+                const cleanS = (pair || '').replace('B-', '').toLowerCase();
+                const livePos = Array.isArray(positions)
+                    ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
+                    : null;
+
+                if (livePos) {
+                    state.currentPosition = livePos;
+                    console.log(`[Sync] ✅ Active position found for ${id} on ${pair}`);
+                } else {
+                    state.currentPosition = null;
                 }
             }
         } catch (err: any) {
             console.error('[Sync] Failed to synchronize state:', err.message);
-            SystemLogService.log('ERROR', 'SYNC', `Failed to synchronize state: ${err.message}`);
         }
     }
 
     private static setupCoinDCXListeners() {
         coinDCXSocket.on('candlestick', async (data: Candle) => {
             try {
-                // SystemLogService.log('INFO', 'SOCKET', `Candlestick received: ${JSON.stringify(data)}`);
-                const settings = SettingsService.getSettings();
-                const incomingPair = (data as any).pair || settings.pair;
-
-                const cleanIncoming = incomingPair.replace('B-', '').replace('_', '').toUpperCase();
-                const cleanSettings = settings.pair.replace('B-', '').replace('_', '').toUpperCase();
-
-                if (cleanIncoming !== cleanSettings) {
-                    return; // Ignore ghost candles from older subscriptions
-                }
-
-                // Emit to frontend on every tick
-                SocketService.io.emit('candlestick', data);
-
-                const price = data.close;
-
-                SocketService.io.emit('price-change', { m: settings.pair, p: data.close });
-
-                PriceStore.update(incomingPair, data.close);
-
-                // Synchronize internal candle buffer on pair/resolution change
-                if (SocketService.lastPair !== settings.pair || SocketService.lastResolution !== settings.timeInterval) {
-                    SocketService.candles = [];
-                    SocketService.candleIndexMap.clear();
-                    SocketService.lastPair = settings.pair;
-                    SocketService.lastResolution = settings.timeInterval;
-                    console.log(`[Lifecycle] 🔄 Resolution/Pair changed: ${settings.pair} ${settings.timeInterval}m. Clearing buffer.`);
-                }
-
-                // --- RESOLUTION PARTITIONING ---
+                const incomingPair = (data as any).pair;
                 const incomingResolution = (data as any).resolution || '1';
-                const isMainResolution = incomingResolution === settings.timeInterval;
-
-                // Log candle arrival occasionally or for specific events
-                if (SocketService.candles.length === 0) {
-                    SystemLogService.log('INFO', 'LIFECYCLE', `First candle received for ${incomingPair} (${incomingResolution}m). Starting buffer.`);
+                
+                // Emit to frontend for the chart (primary pair only or all? Let's emit all for now)
+                SocketService.io.emit('candlestick', data);
+                
+                if (incomingPair) {
+                    PriceStore.update(incomingPair, data.close);
+                    SocketService.io.emit('price-change', { m: incomingPair, p: data.close });
                 }
 
-                // 1. Monitor Price always (every tick/candle)
-                if (settings.activeTradeStatus === 'open') {
-                    SocketService.monitorRealTimeSL(data).catch(err => console.error('[Monitor] ❌ Check Error:', err.message));
-                }
+                // Find all configs that use this pair
+                for (const [id, state] of SocketService.configStates.entries()) {
+                    const config = state.config;
+                    const cleanIncoming = incomingPair.replace('B-', '').replace('_', '').toUpperCase();
+                    const cleanConfig = config.pair.replace('B-', '').replace('_', '').toUpperCase();
 
-                // 🔍 CHECK PENDING BREAKOUT (Gold Strategy Specific)
-                // This needs to run on 1m candles to catch the sweep, even if main resolution is higher.
-                if (incomingResolution === '1' && settings.selectedStrategyId === 'tp-gold-opening-breakout') {
-                    const strategy = strategies['tp-gold-opening-breakout'] as any;
-                    if (strategy.constructor?.checkPendingBreakout) {
-                        const result = strategy.constructor.checkPendingBreakout(data, settings);
-                        if (result.matched && result.trade) {
-                            SystemLogService.log('INFO', 'STRATEGY', `🚀 Gold Pending Breakout Triggered on 1m candle! Entry: ${result.trade.entryPrice}`);
-                            SocketService.executeSignal(result.trade, settings).catch(err => {
-                                SystemLogService.log('ERROR', 'EXECUTION', `Failed to execute Gold breakout signal: ${err.message}`, { error: err });
-                            });
-                        }
-                    }
-                }
+                    if (cleanIncoming !== cleanConfig) continue;
 
-                if (!isMainResolution) {
-                    return; // Auxiliary resolution (e.g. 1m when main is 5m) - skip strategy logic
-                }
+                    // 1. Monitor Real-time SL/TP for open trades (always on every tick)
+                    // We check if this config has an open trade in DB
+                    // For performance, we could cache "hasActiveTrade" in state
+                    SocketService.monitorRealTimeSL(data, id, state).catch(err => console.error(`[Monitor] ❌ ${id} Error:`, err.message));
 
-                // --- MAIN STRATEGY LOGIC (Main Timeframe Only) ---
-                // O(1) lookup instead of O(n) findIndex
-                if (SocketService.candleIndexMap.has(data.time)) {
-                    // Same candle still forming — just update it
-                    const idx = SocketService.candleIndexMap.get(data.time)!;
-                    SocketService.candles[idx] = data;
-                } else {
-                    // New candle arrived — previous one is now closed
-                    const isNewCandleTrigger = SocketService.candles.length > 0;
-
-                    // Register in map before pushing
-                    SocketService.candleIndexMap.set(data.time, SocketService.candles.length);
-                    SocketService.candles.push(data);
-
-                    if (SocketService.candles.length > 3000) {
-                        const removed = SocketService.candles.shift();
-                        if (removed) {
-                            SocketService.candleIndexMap.clear();
-                            SocketService.candles.forEach((c, i) => SocketService.candleIndexMap.set(c.time, i));
+                    // 2. Gold Strategy Pending Breakout (on 1m resolution)
+                    if (incomingResolution === '1' && config.strategyId === 'tp-gold-opening-breakout') {
+                        const strategy = strategies['tp-gold-opening-breakout'] as any;
+                        if (strategy.constructor?.checkPendingBreakout) {
+                            const result = strategy.constructor.checkPendingBreakout(data, config);
+                            if (result.matched && result.trade) {
+                                SystemLogService.log('INFO', 'STRATEGY', `🚀 Gold Pending Breakout Triggered for ${id} on 1m!`);
+                                SocketService.executeSignal(result.trade, id, state).catch(err => {
+                                    SystemLogService.log('ERROR', 'EXECUTION', `Failed to execute Gold breakout for ${id}: ${err.message}`);
+                                });
+                            }
                         }
                     }
 
-                    if (isNewCandleTrigger) {
-                        const closedCandle: any = SocketService.candles[SocketService.candles.length - 1];
-                        if (SocketService.lastProcessedCandleTime !== closedCandle.time) {
-                            SocketService.lastProcessedCandleTime = closedCandle.time;
+                    // 3. Main Strategy Logic (on config resolution)
+                    if (incomingResolution === config.timeInterval) {
+                        // Update internal candle buffer for this state
+                        if (state.candleIndexMap.has(data.time)) {
+                            const idx = state.candleIndexMap.get(data.time)!;
+                            state.candles[idx] = data;
+                        } else {
+                            const isNewCandleTrigger = state.candles.length > 0;
+                            state.candleIndexMap.set(data.time, state.candles.length);
+                            state.candles.push(data);
 
-                            const localState = settings.activeTradeStatus.toUpperCase();
-                            const exchangeState = SocketService.currentPosition ? 'ACTIVE' : 'NONE';
-                            console.log(`[Status] ${incomingPair} (${incomingResolution}m): ${data.close} | Local: ${localState} | Exchange: ${exchangeState} | Flag: closing=${SocketService.isClosingPosition}`);
+                            if (state.candles.length > 3000) {
+                                state.candles.shift();
+                                state.candleIndexMap.clear();
+                                state.candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
+                            }
 
-                            // Strategy Scan on Interval
-                            const intervalMinutes = Number(settings.timeInterval);
-                            const currentTime = new Date(closedCandle.time);
-                            if (currentTime.getMinutes() % intervalMinutes === 0) {
-                                if (!SocketService.isStrategyRunning) {
-                                    SystemLogService.log('INFO', 'STRATEGY', `🚀 ${intervalMinutes}m Interval Reached. Running Strategy scan for ${settings.pair}...`);
-                                    SocketService.isStrategyRunning = true;
-                                    SocketService.executeLiveStrategy()
-                                        .catch(err => {
-                                            SystemLogService.log('ERROR', 'STRATEGY', `Strategy scan failed: ${err.message}`, { error: err });
-                                        })
-                                        .finally(() => SocketService.isStrategyRunning = false);
+                            if (isNewCandleTrigger) {
+                                 const closedCandle = state.candles[state.candles.length - 2]; // The one that just finished
+                                 if (closedCandle && state.lastProcessedCandleTime !== closedCandle.time) {
+                                     state.lastProcessedCandleTime = closedCandle.time;
+                                    
+                                    // Run strategy scan if interval reached
+                                    const intervalMinutes = Number(config.timeInterval);
+                                     const currentTime = new Date(closedCandle.time);
+                                     if (closedCandle.time && currentTime.getMinutes() % intervalMinutes === 0) {
+                                        if (!state.isStrategyRunning) {
+                                            state.isStrategyRunning = true;
+                                            SocketService.executeLiveStrategy(id, state)
+                                                .catch(err => SystemLogService.log('ERROR', 'STRATEGY', `Scan failed for ${id}: ${err.message}`))
+                                                .finally(() => state.isStrategyRunning = false);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -238,7 +239,6 @@ export class SocketService {
                 }
             } catch (err: any) {
                 console.error('[Candlestick] ❌ Listener Critical Error:', err.message);
-                SystemLogService.log('ERROR', 'SOCKET', `Candlestick Listener Failed: ${err.message}`);
             }
         });
 
@@ -250,11 +250,6 @@ export class SocketService {
 
 
         coinDCXSocket.on('df-position-update', async (positions: any[]) => {
-            const settings = SettingsService.getSettings();
-            const pair = settings.pair;
-
-            const wasActive = !!SocketService.currentPosition && SocketService.currentPosition.active_pos !== 0;
-
             // 📦 UNPACKING: The socket often sends data as a stringified JSON array
             let posList: any[] = [];
             try {
@@ -270,91 +265,35 @@ export class SocketService {
                 });
             } catch (err: any) {
                 console.error("[Position] ❌ Unpacking failed:", err);
-                SystemLogService.log('ERROR', 'POSITION', `Unpacking failed: ${err.message || err}`);
             }
 
-            // Fuzzy matching for pair names
-            const pos = posList.find((p: any) => {
-                const cleanP = (p.pair || '').replace('B-', '').toLowerCase();
-                const cleanS = (pair || '').replace('B-', '').toLowerCase();
-                return cleanP === cleanS;
-            });
+            // Sync all configs
+            for (const [id, state] of SocketService.configStates.entries()) {
+                const config = state.config;
+                const pair = config.pair;
+                const wasActive = !!state.currentPosition && state.currentPosition.active_pos !== 0;
 
-            let isActive = !!pos && pos.active_pos !== 0;
+                const pos = posList.find((p: any) => {
+                    const cleanP = (p.pair || '').replace('B-', '').toLowerCase();
+                    const cleanC = (pair || '').replace('B-', '').toLowerCase();
+                    return cleanP === cleanC;
+                });
 
-            if (posList.length > 0 && !pos) {
-                // SystemLogService.log('INFO', 'POSITION', `Received ${posList.length} positions, but none matched ${pair}. Items:`, { posList });
-            }
+                let isActive = !!pos && pos.active_pos !== 0;
 
-            if (isActive) {
-                if (!wasActive) {
-                    SystemLogService.log('INFO', 'POSITION', `New position detected for ${pair} at ${pos.entry_price}`);
-                }
-                SocketService.currentPosition = pos;
-            }
-
-            // --- ENHANCED PROTECTION AGAINST PHANTOM CLOSURES ---
-            if (wasActive && !isActive) {
-                if (SocketService.isClosingPosition) {
-                    console.log(`[Position] ${pair} closure detected at SL level. Finalizing state.`);
-                    // Skip REST verification and proceed to closure logic
+                if (isActive) {
+                    state.currentPosition = pos;
                 } else {
-                    console.log(`[Position] Socket suggests ${pair} is closed. Checking REST with grace period...`);
-
-                    // Give the REST API 2 seconds to synchronize before we trust its 'Open' status
-                    await new Promise(res => setTimeout(res, 2000));
-
-                    try {
-                        const livePositions = await TradeService.getPositions();
-                        const confirmedPos = Array.isArray(livePositions)
-                            ? livePositions.find((p: any) => p.pair === pair && p.active_pos !== 0)
-                            : null;
-
-                        if (confirmedPos) {
-                            console.log(`[Position] 🚑 REST confirms trade is STILL OPEN after grace period. Ignoring socket ghost.`);
-                            isActive = true;
-                            SocketService.currentPosition = confirmedPos;
-                            return;
-                        }
-                    } catch (err: any) {
-                        console.error(`[Position] REST verification failed, defaulting to socket 'Closed' state.`);
-                        SystemLogService.log('ERROR', 'POSITION', `REST verification failed: ${err.message}`);
-                    }
-                }
-            }
-
-            if (isActive) {
-                // Position is open on exchange
-                SocketService.currentPosition = pos;
-                if (!wasActive) {
-                    console.log(`[Position] 📈 Trade detected locally. Pair: ${pair} @ ${pos.entry_price}`);
-                }
-            } else {
-                SocketService.currentPosition = null;
-
-                // CRITICAL FIX: Trigger closure logic if local state says 'open' OR we had a cached position
-                // This handles trades that open and close (SL/TP hit) before the first socket update arrives.
-                if (wasActive || settings.activeTradeStatus === 'open') {
-                    // State transition: open → flat (trade just closed)
-
-                    console.log(`[Position] Trade CLOSED for ${pair}`);
-
-                    // Sync balance if live trading — but close the trade regardless of result
-                    if (settings.isLiveTrading) {
-                        const marginCurrency = pair.includes('USDT') ? 'USDT' : 'INR';
+                    // Check for closure
+                    if (wasActive) {
+                        state.currentPosition = null;
+                        console.log(`[Position] Trade CLOSED for ${id} on ${pair}`);
+                        
+                        // Record exit if needed
                         try {
-                            // 🎯 Removed bankBalance sync to avoid AWS 404/GET body issues
-                            // await TradeService.syncLiveBalance(marginCurrency);
-                        } catch (err: any) {
-                            console.error('[Position] Balance sync failed:', err);
-                            SystemLogService.log('ERROR', 'POSITION', `Balance sync failed: ${err.message}`);
-                        }
-
-                        // Record trade exit details 
-                        try {
-                            const activeTrade = await TradeHistoryService.getActiveTrade();
+                            const activeTrade = await TradeHistoryService.getActiveTrade(id);
                             if (activeTrade && activeTrade.status === 'open') {
-                                const lastCandle = SocketService.candles[SocketService.candles.length - 1];
+                                const lastCandle = state.candles[state.candles.length - 1];
                                 const exitPrice = lastCandle ? lastCandle.close : activeTrade.entryPrice;
 
                                 activeTrade.status = 'closed';
@@ -367,179 +306,101 @@ export class SocketService {
                                 activeTrade.fee = fee;
 
                                 await TradeHistoryService.saveTrade(activeTrade);
-                                console.log(`[Position] Recorded exit for ${pair} at ${exitPrice}. Profit: ${profit}`);
                                 SocketService.io.emit('trade-history-update', activeTrade);
                             }
                         } catch (err: any) {
-                            console.error('[Position] Failed to record trade exit:', err);
-                            SystemLogService.log('ERROR', 'POSITION', `Failed to record trade exit: ${err.message}`);
+                            console.error(`[Position] Failed to record exit for ${id}:`, err.message);
                         }
                     }
-
-                    // Always mark closed — don't let syncLiveBalance failure block this
-                    await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                    SocketService.io.emit('settings-update', SettingsService.getSettings());
                 }
             }
-
-            console.log(
-                `[Position] ${pair}:`,
-                SocketService.currentPosition ? `ACTIVE @ ${SocketService.currentPosition.entry_price}` : 'NONE'
-            );
         });
     }
 
-    private static async executeLiveStrategy() {
+    private static async executeLiveStrategy(configId: string, state: LiveState) {
         try {
-             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-1');
-            const settings = SettingsService.getSettings();
-
-            // 1. Fetch latest trade to check status
-            const activeTrade = await TradeHistoryService.getActiveTrade();
+            const config = state.config;
+            const pair = config.pair;
+            SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: for ${pair} detected.`);
+            // 1. Fetch latest trade for THIS CONFIG to check status
+            const activeTrade = await TradeHistoryService.getActiveTrade(configId);
 
             if (activeTrade && activeTrade.status === 'open') {
-                console.log(`[Strategy] ⏭️ Trade is ALREADY OPEN (${activeTrade.type}). Skipping signal scan.`);
-                SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Trade is already open (${activeTrade.type})`);
                 return;
             }
 
-            // Extra safety: Check settings flag too
-            if (settings.activeTradeStatus === 'open') {
-                console.log(`[Strategy] ⏭️ Settings say trade is open. Skipping.`);
-                SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: ActiveTradeStatus is 'open' in settings`);
-                return;
-            }
- 
-            const pair = settings.pair;
-            const latestCandle = SocketService.candles[SocketService.candles.length - 1];
-                       SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-2');
-            if (!latestCandle) {
-                SystemLogService.log('WARN', 'STRATEGY', 'Scan skipped: No latest candle found in buffer');
-                return;
-            }
+            const latestCandle = state.candles[state.candles.length - 1];
+            if (!latestCandle) return;
 
-            // 🛑 GUARD: Prevent multiple entries for the same candle (Real vs Paper race)
-            if (SocketService.lastSignalTime === latestCandle.time) {
-                SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Already processed candle at ${latestCandle.time}`);
-                return;
-            }        
-                 SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-3');
+            // 🛑 GUARD: Prevent multiple entries for the same candle
+            if (state.lastSignalTime === latestCandle.time) return;
 
-            const leverage = settings.leverage;
-            const initialCapital = settings.initialCapital;
-            // 🛑 MATHEMATICAL PARITY FIX: Ensure Live explicitly mathematically strictly loads 7 Days 
-            // of pure technical history precisely perfectly identically safely dynamically exactly identically matching the Backtester strictly inherently!
+            const leverage = config.leverage;
+            const initialCapital = config.initialCapital;
             const from = Math.floor(Date.now() / 1000) - (7 * 86400);
 
             // 2. Refresh candles if buffer is missing
-            if (SocketService.candles.length < 10) {
-                console.log(`[Strategy] 📥 Buffer low (${SocketService.candles.length}). Fetching history for ${pair}...`);
+            if (state.candles.length < 10) {
+                console.log(`[Strategy] 📥 Buffer low for ${configId}. Fetching history for ${pair}...`);
                 const response = await CoinDCXApiService.getCandlesticks({
                     pair,
                     from,
                     to: Math.floor(Date.now() / 1000),
-                    resolution: settings.timeInterval
+                    resolution: config.timeInterval
                 });
                 if (response.s === 'ok' && Array.isArray(response.data)) {
-                    SocketService.candles = response.data.sort((a: Candle, b: Candle) => a.time - b.time);
-                    SocketService.candleIndexMap.clear();
-                    SocketService.candles.forEach((c, i) => SocketService.candleIndexMap.set(c.time, i));
-                    console.log(`[Strategy] ✅ History loaded: ${SocketService.candles.length} candles.`);
-                    SystemLogService.log('INFO', 'STRATEGY', `Successfully loaded ${SocketService.candles.length} candles for ${pair}`);
-                } else {
-                    console.error(`[Strategy] ❌ Failed to fetch candlesticks for ${pair}`);
-                    SystemLogService.log('ERROR', 'STRATEGY', `Failed to fetch candlesticks for ${pair}: ${response.message || 'Unknown error'}`);
+                    state.candles = response.data.sort((a: Candle, b: Candle) => a.time - b.time);
+                    state.candleIndexMap.clear();
+                    state.candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
                 }
             }
-             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-4');
-            if (SocketService.candles.length === 0) {
-                console.warn('[Strategy] ❌ No data available for analysis. Skipping cycle.');
-                SystemLogService.log('ERROR', 'STRATEGY', `Scan aborted: No candle data available for ${pair}`);
-                return;
-            }
+
+            if (state.candles.length === 0) return;
 
             // 3. Select Strategy
-            const selectedStrategyId = settings.selectedStrategyId || 'opening-breakout';
-            const strategy = strategies[selectedStrategyId as keyof typeof strategies] as any;
-
-            if (!strategy) {
-                console.error(`[Strategy] ❌ CRITICAL: Unknown strategy ID: ${selectedStrategyId}`);
-                SystemLogService.log('ERROR', 'STRATEGY', `CRITICAL: Unknown strategy ID: ${selectedStrategyId}`);
-                return;
-            }
-             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-5');
-            // 3. One last safety sync with exchange
-            const cleanS = (pair || '').replace('B-', '').toLowerCase();
-            if (settings.isLiveTrading) {
-                             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-6');
-                const positions = await TradeService.getPositions();
-                const livePos = Array.isArray(positions)
-                    ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
-                    : null;
-
-                if (livePos) {
-                                 SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-7');
-                    console.log(`[Strategy] 🚑 Exchange has active position. Syncing local state ONLY.`);
-                    SystemLogService.log('INFO', 'STRATEGY', `Scan skipped: Exchange has active position for ${pair}`);
-                    SocketService.currentPosition = livePos;
-                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                    SocketService.io.emit('settings-update', SettingsService.getSettings());
-                    return;
-                }
-            }
+            const strategy = strategies[config.strategyId as keyof typeof strategies] as any;
+            if (!strategy) return;
 
             // 🎯 NEW RISK LOGIC (Fallback-free):
-            // If mode is 'capital', we use the manual budget (e.g. $250).
-            // If mode is 'minimal', we use the exchange's absolute minimum required ($6).
             let liveCapital = initialCapital;
-            if (settings.isLiveTrading) {
-                             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-8');
-                const exchangeData = TradeService.getInstrumentDetailsSync(pair || settings.pair);
+            if (config.isLiveTrading) {
+                const exchangeData = TradeService.getInstrumentDetailsSync(pair);
                 const minNotional = exchangeData.minNotional || 6;
 
-                if (settings.riskMode === 'capital') {
-                    liveCapital = settings.initialCapital || 100;
-                    SystemLogService.log('INFO', 'RISK', `💰 Capital Mode: Using $${liveCapital} of capital at ${leverage}x leverage.`);
+                if (config.riskMode === 'capital') {
+                    liveCapital = config.initialCapital || 100;
                 } else {
-                    // Minimal Mode: Safety buffer 110% of minimum
                     const safeNotional = minNotional * 1.10;
                     liveCapital = safeNotional / leverage;
-                    SystemLogService.log('INFO', 'RISK', `🛡️ Minimal Mode: Scaling down... using $${liveCapital.toFixed(4)} of capital to hit $${safeNotional.toFixed(2)} notional.`);
                 }
             }
-             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-9');
-            // 4. Run Strategy Check
-            const hasTradedToday = await TradeHistoryService.hasTradedToday(pair);
-            console.log(`[Strategy] 🔍 Scanning ${SocketService.candles.length} candles for '${selectedStrategyId}' signal... ${hasTradedToday ? '(Lockout Active)' : ''}`);
 
-            const result = strategy.run(SocketService.candles, {
+            // 4. Run Strategy Check
+            const hasTradedToday = await TradeHistoryService.hasTradedToday(pair, config.strategyId, configId);
+            
+            const result = strategy.run(state.candles, {
                 pair: pair,
                 type: 'live',
                 capital: liveCapital,
                 leverage: leverage,
                 atrMultiplierSL: 1,
                 simulationStartUnix: from,
-                hasTradedToday // 🛡️ One-and-Done Lockout for OpeningBreakout
+                hasTradedToday 
             });
-            console.log(result, 'result---')
-                         SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-10');
+
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
-                SocketService.lastSignalTime = latestCandle.time;
-                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL: ${latest.direction} for ${pair} detected. Executing...`);
-                SocketService.io.emit('strategy-signal', { pair, trade: latest });
+                state.lastSignalTime = latestCandle.time;
+                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: ${latest.direction} for ${pair} detected.`);
+                SocketService.io.emit('strategy-signal', { configId, pair, trade: latest });
 
-                const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
-                const tradeType = isRealTrade ? 'real' : 'paper';
-
+                const isRealTrade = config.isLiveTrading;
+                
                 if (isRealTrade) {
-                    if (SocketService.isPlacingOrder) {
-                        SystemLogService.log('WARN', 'EXECUTION', `Order already in progress for ${pair}. Skipping duplicate entry.`);
-                        return;
-                    }
-                    SocketService.isPlacingOrder = true;
+                    if (state.isPlacingOrder) return;
+                    state.isPlacingOrder = true;
                     try {
-                        SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL entry for ${pair} (${latest.direction}) at ${latest.entryPrice}...`);
+                        SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL entry for ${configId} (${latest.direction}) at ${latest.entryPrice}...`);
                         await TradeService.executeFutureOrder({
                             ...latest,
                             stop_loss_price: latest.sl
@@ -548,24 +409,22 @@ export class SocketService {
                         await new Promise(res => setTimeout(res, 1000));
 
                         const positions = await TradeService.getPositions();
+                        const cleanS = pair.replace('B-', '').toLowerCase();
                         const newPos = Array.isArray(positions)
                             ? positions.find((p: any) => (p.pair || '').replace('B-', '').toLowerCase() === cleanS && p.active_pos !== 0)
                             : null;
 
                         if (newPos) {
-                            SocketService.currentPosition = newPos;
-                            SystemLogService.log('INFO', 'EXECUTION', `✅ REAL Entry Verified for ${pair}. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
-                        } else {
-                            SystemLogService.log('WARN', 'EXECUTION', `⚠️ Order placed for ${pair} but no active position found on exchange after 1s. Check exchange logs.`);
+                            state.currentPosition = newPos;
+                            SystemLogService.log('INFO', 'EXECUTION', `✅ REAL Entry Verified for ${configId}.`);
                         }
-
-                        await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                        SocketService.io.emit('settings-update', SettingsService.getSettings());
 
                         const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
                         await TradeHistoryService.saveTrade({
                             ...latest,
                             pair,
+                            strategyId: config.strategyId,
+                            configId,
                             direction: latest.direction,
                             entryPrice: entryPrice,
                             status: 'open',
@@ -574,31 +433,19 @@ export class SocketService {
                         });
                     } catch (err: any) {
                         const errorMessage = err.response?.data?.message || err.message;
-                        SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Execution Failed for ${pair}: ${errorMessage}`, { error: err.response?.data || err });
-                        await TradeHistoryService.saveTrade({
-                            ...latest,
-                            pair,
-                            direction: latest.direction,
-                            entryPrice: latest.entryPrice,
-                            status: 'failed',
-                            type: 'real',
-                            profit: 0,
-                            entryTime: new Date().toISOString(),
-                            executionError: errorMessage
-                        });
+                        SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Execution Failed for ${configId}: ${errorMessage}`);
                     } finally {
-                        SocketService.isPlacingOrder = false;
+                        state.isPlacingOrder = false;
                     }
                 } else {
                     // PAPER TRADE LOGIC
-                    SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER entry for ${pair} (${latest.direction})...`);
-
-                    await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                    SocketService.io.emit('settings-update', SettingsService.getSettings());
+                    SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER entry for ${configId} (${latest.direction})...`);
 
                     await TradeHistoryService.saveTrade({
                         ...latest,
                         pair,
+                        strategyId: config.strategyId,
+                        configId,
                         direction: latest.direction,
                         entryPrice: latest.entryPrice,
                         status: 'open',
@@ -606,34 +453,25 @@ export class SocketService {
                         entryTime: new Date().toISOString()
                     });
                 }
-            } else {
-                console.log('[Strategy] 🧊 No signal found on this candle.');
-                             SystemLogService.log('INFO', 'STRATEGY','executeLiveStrategy step-11');
-                // SystemLogService.log('INFO', 'STRATEGY', `Scan complete: No signal found for ${pair}`);
             }
         } catch (err: any) {
             console.error('[Autonomous] Strategy routine failed:', err.message);
-            SystemLogService.log('ERROR', 'STRATEGY', `Autonomous Strategy routine failed: ${err.message}`);
         }
     }
 
-    private static async executeSignal(latest: Trade, settings: any) {
-        const pair = settings.pair;
+    private static async executeSignal(latest: Trade, configId: string, state: LiveState) {
+        const config = state.config;
+        const pair = config.pair;
         const cleanS = (pair || '').replace('B-', '').toLowerCase();
 
-        SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${latest.type || (settings.isLiveTrading ? 'REAL' : 'PAPER')} signal for ${pair}`);
-        SocketService.io.emit('strategy-signal', { pair, trade: latest });
+        SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${config.isLiveTrading ? 'REAL' : 'PAPER'} signal for ${configId}`);
+        SocketService.io.emit('strategy-signal', { configId, pair, trade: latest });
 
-        const isRealTrade = settings.isLiveMonitoring && settings.isLiveTrading;
-
-        if (isRealTrade) {
-            if (SocketService.isPlacingOrder) {
-                SystemLogService.log('WARN', 'EXECUTION', `Order already in progress for ${pair}. Skipping signal execute.`);
-                return;
-            }
-            SocketService.isPlacingOrder = true;
+        if (config.isLiveTrading) {
+            if (state.isPlacingOrder) return;
+            state.isPlacingOrder = true;
             try {
-                SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL SIGNAL entry for ${pair} (${latest.direction}) at ${latest.entryPrice}...`);
+                SystemLogService.log('INFO', 'EXECUTION', `🚀 Executing REAL SIGNAL for ${configId} at ${latest.entryPrice}...`);
                 await TradeService.executeFutureOrder({
                     ...latest,
                     stop_loss_price: latest.sl,
@@ -648,19 +486,15 @@ export class SocketService {
                     : null;
 
                 if (newPos) {
-                    SocketService.currentPosition = newPos;
-                    SystemLogService.log('INFO', 'EXECUTION', `✅ REAL Signal Entry Verified for ${pair}. Position ID: ${newPos.id} @ ${newPos.entry_price}`);
-                } else {
-                    SystemLogService.log('WARN', 'EXECUTION', `⚠️ Signal order placed for ${pair} but no active position found on exchange after 1s.`);
+                    state.currentPosition = newPos;
                 }
-
-                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                SocketService.io.emit('settings-update', SettingsService.getSettings());
 
                 const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
                 await TradeHistoryService.saveTrade({
                     ...latest,
                     pair,
+                    strategyId: config.strategyId,
+                    configId,
                     direction: latest.direction,
                     entryPrice: entryPrice,
                     status: 'open',
@@ -669,63 +503,40 @@ export class SocketService {
                 });
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;
-                SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Signal Execution Failed for ${pair}: ${errorMessage}`, { error: err.response?.data || err });
-                await TradeHistoryService.saveTrade({
-                    ...latest,
-                    pair,
-                    direction: latest.direction,
-                    entryPrice: latest.entryPrice,
-                    status: 'failed',
-                    type: 'real',
-                    profit: 0,
-                    entryTime: new Date().toISOString(),
-                    executionError: errorMessage
-                });
+                SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Signal Failed for ${configId}: ${errorMessage}`);
             } finally {
-                SocketService.isPlacingOrder = false;
+                state.isPlacingOrder = false;
             }
         } else {
             try {
-                console.log(`[Strategy] 📝 Executing PAPER entry for ${pair}...`);
-                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                SocketService.io.emit('settings-update', SettingsService.getSettings());
-                // PAPER TRADE LOGIC
-                SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER SIGNAL entry for ${pair} (${latest.direction})...`);
-                await SettingsService.saveSettings({ activeTradeStatus: 'open' });
-                SocketService.io.emit('settings-update', SettingsService.getSettings());
-
                 await TradeHistoryService.saveTrade({
                     ...latest,
                     pair,
+                    strategyId: config.strategyId,
+                    configId,
                     direction: latest.direction,
                     entryPrice: latest.entryPrice,
                     status: 'open',
                     type: 'paper',
                     entryTime: new Date().toISOString()
                 });
-                console.log(`[Strategy] 🏁 Paper trade cycle initialized.`);
-                SystemLogService.log('INFO', 'STRATEGY', `✅ PAPER trade initialized successfully for ${pair}`);
+                SystemLogService.log('INFO', 'STRATEGY', `✅ PAPER trade initialized for ${configId}`);
             } catch (err: any) {
-                console.error('[Strategy] ❌ PAPER Execution Failed:', err.message);
-                SystemLogService.log('ERROR', 'STRATEGY', `PAPER Execution Failed for ${pair}: ${err.message}`);
+                SystemLogService.log('ERROR', 'STRATEGY', `PAPER Execution Failed for ${configId}: ${err.message}`);
             }
         }
     }
 
-    private static async monitorRealTimeSL(tick: Candle) {
+    private static async monitorRealTimeSL(tick: Candle, configId: string, state: LiveState) {
         try {
-            const settings = SettingsService.getSettings();
-            if (settings.activeTradeStatus !== 'open') return;
-
-            const activeTrade = await TradeHistoryService.getActiveTrade();
+            const config = state.config;
+            const activeTrade = await TradeHistoryService.getActiveTrade(configId);
             if (!activeTrade) return;
 
             const sl = activeTrade.sl || activeTrade.stop_loss_price || 0;
             const tp = activeTrade.tp || activeTrade.take_profit_price || 0;
             const isBuy = activeTrade.direction === 'buy';
 
-            // 🎯 TICKER-BASED PRECISION: Check against the HIGH and LOW of the current tick update.
-            // This ensures we catch SL/TP hits even if the 'close' price has already bounced back.
             let exitReason = '';
             if (isBuy) {
                 if (sl > 0 && tick.low <= sl) exitReason = 'SL';
@@ -737,14 +548,14 @@ export class SocketService {
 
             if (exitReason) {
                 const triggerPrice = exitReason === 'SL' ? sl : tp;
-                SystemLogService.log('INFO', 'MONITOR', `🎯 ${exitReason} Triggered at ${tick.close} (Trigger: ${triggerPrice}) for ${activeTrade.pair}`);
+                SystemLogService.log('INFO', 'MONITOR', `🎯 ${exitReason} Triggered [${configId}] at ${tick.close} for ${activeTrade.pair}`);
 
-                if (activeTrade.type === 'real' && !SocketService.isClosingPosition) {
-                    SocketService.isClosingPosition = true;
+                if (activeTrade.type === 'real' && !state.isClosingPosition) {
+                    state.isClosingPosition = true;
                     try {
-                        const pair = settings.pair;
+                        const pair = config.pair;
                         const cleanS = (pair || '').replace('B-', '').toLowerCase();
-                        let pos = SocketService.currentPosition;
+                        let pos = state.currentPosition;
 
                         if (!pos) {
                             const positions = await TradeService.getPositions();
@@ -754,18 +565,15 @@ export class SocketService {
                         }
 
                         if (pos) {
-                            SystemLogService.log('INFO', 'EXECUTION', `🚀 Closing real position ${pos.id} for ${pair} due to ${exitReason} hit.`);
+                            SystemLogService.log('INFO', 'EXECUTION', `🚀 Closing real position ${pos.id} for ${configId} due to ${exitReason} hit.`);
                             await TradeService.closePosition({ positionId: pos.id });
-                            SystemLogService.log('INFO', 'EXECUTION', `✅ Position ${pos.id} closed successfully.`);
-                        } else {
-                            SystemLogService.log('WARN', 'EXECUTION', `⚠️ ${exitReason} hit for real trade, but no active position found on exchange to close.`);
                         }
                     } catch (err: any) {
-                        SystemLogService.log('ERROR', 'EXECUTION', `❌ Real exit failed for ${activeTrade.pair}: ${err.message}`, { error: err });
+                        SystemLogService.log('ERROR', 'EXECUTION', `❌ Real exit failed for ${configId}: ${err.message}`);
                     }
                 }
 
-                // Update DB regardless (for paper, or to mark real as closing)
+                // Update DB
                 activeTrade.status = 'closed';
                 activeTrade.exitPrice = tick.close;
                 activeTrade.exitTime = new Date().toISOString();
@@ -776,128 +584,151 @@ export class SocketService {
                 activeTrade.fee = fee;
 
                 await TradeHistoryService.saveTrade(activeTrade);
-                await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
-                SocketService.io.emit('settings-update', SettingsService.getSettings());
                 SocketService.io.emit('trade-history-update', activeTrade);
-                SocketService.isClosingPosition = false;
+                state.isClosingPosition = false;
             }
         } catch (err: any) {
             console.error("Monitor status failed:", err.message);
-            SystemLogService.log('ERROR', 'MONITOR', `Monitor status failed: ${err.message}`);
         }
     }
 
     /**
-     * Reconstructs the current day's trade history (from 00:00) 
-     * by running a dedicated backtest on the strategy.
+     * Synchronizes state for all active configurations (History Recovery)
      */
-    static async recoverTodayTrades(type: 'paper' | 'recovery' = 'paper') {
+    public static async refreshConfigs() {
         try {
-            const settings = SettingsService.getSettings();
-            const pair = settings.pair;
-            const resolution = settings.timeInterval;
+            const configs = await LiveConfigService.getEnabledConfigs();
+            
+            // Track IDs to remove disabled ones
+            const activeIds = new Set(configs.map(c => c._id.toString()));
+            for (const [id, state] of SocketService.configStates.entries()) {
+                if (!activeIds.has(id)) {
+                    console.log(`[Lifecycle] 🛑 Removing disabled config: ${id}`);
+                    SocketService.configStates.delete(id);
+                }
+            }
+
+            for (const config of configs) {
+                SocketService.addConfigState(config);
+            }
+        } catch (err: any) {
+            console.error('[Lifecycle] ❌ Failed to refresh configs:', err.message);
+        }
+    }
+
+    public static async syncExchangeState() {
+        try {
+            // 🔄 HOT RELOAD: Refresh enabled configurations from DB
+            await SocketService.refreshConfigs();
 
             // Start of today in IST (Kolkata)
             const todayKolkata = dayjs().tz('Asia/Kolkata').startOf('day');
             const startOfDay = todayKolkata.valueOf();
-
-            // 🚀 WARM-UP FIX: Fetch 7 DAYS before today formally efficiently rationally seamlessly cleanly gracefully creatively smoothly organically!
-            const from = Math.floor(startOfDay / 1000) - (7 * 86400);
+            const from = Math.floor(startOfDay / 1000) - (7 * 86400); // 7-Day warm-up
             const to = Math.floor(Date.now() / 1000);
 
-            console.log(`[Recovery] 🔄 Recovering trade history for ${pair} with 7-Day warm-up...`);
-
-            // 🛡️ WAIT FOR DB: Ensure MongoDB is actually ready before we start hitting it
+            // 🛡️ WAIT FOR DB
             let retries = 0;
             const mongoose = (await import('mongoose')).default;
             while (mongoose.connection.readyState !== 1 && retries < 10) {
-                console.log(`[Recovery] ⏳ Waiting for MongoDB readiness (attempt ${retries + 1})...`);
+                console.log(`[Sync] ⏳ Waiting for MongoDB readiness (attempt ${retries + 1})...`);
                 await new Promise(res => setTimeout(res, 1000));
                 retries++;
             }
 
             if (mongoose.connection.readyState !== 1) {
-                console.error("[Recovery] ❌ MongoDB failed to connect in time. Skipping recovery.");
+                console.error("[Sync] ❌ MongoDB connection failed. Skipping recovery.");
                 return;
             }
 
-            // 1. Fetch main candles
-            const response = await CoinDCXApiService.getCandlesticks({
-                pair,
-                from,
-                to,
-                resolution
-            });
-
-            if (response.s !== 'ok' || !Array.isArray(response.data)) {
-                console.warn("[Recovery] ⚠️ No data found to recover.");
+            if (SocketService.configStates.size === 0) {
+                console.warn("[Sync] ⚠️ No active configurations found to synchronize.");
                 return;
             }
 
-            const candles = response.data.sort((a: any, b: any) => a.time - b.time);
+            console.log(`[Sync] 🔍 Synchronizing ${SocketService.configStates.size} active configurations...`);
 
-            // 2. Fetch 1m sub-candles for accurate SL/TP simulation (EXACTLY from start of today)
-            let subCandles: Candle[] = [];
-            if (resolution !== '1') {
-                const subRes = await CoinDCXApiService.getCandlesticks({
+            for (const [configId, state] of SocketService.configStates.entries()) {
+                const config = state.config;
+                const pair = config.pair;
+                const resolution = config.timeInterval || '1';
+
+                console.log(`[Recovery] 🔄 Processing ${pair} [${config.strategyId}]...`);
+
+                // 1. Fetch main candles
+                const response = await CoinDCXApiService.getCandlesticks({
                     pair,
-                    from: Math.floor(startOfDay / 1000),
+                    from,
                     to,
-                    resolution: '1',
-                    limit: 2000 // Ensure we get the full day of data
+                    resolution
                 });
-                console.log(`[Recovery] 📥 Loaded ${subRes.data.length} sub-candles for today (from 00:00).------------`);
-                if (subRes.s === 'ok' && Array.isArray(subRes.data)) {
-                    subCandles = subRes.data.sort((a: any, b: any) => a.time - b.time);
-                    console.log(`[Recovery] 📥 Loaded ${subCandles.length} sub-candles for today (from 00:00).`);
+
+                if (response.s !== 'ok' || !Array.isArray(response.data)) {
+                    console.warn(`[Recovery] ⚠️ No data for ${pair}`);
+                    continue;
                 }
-            }
 
-            // 3. Select Strategy
-            const selectedStrategyId = settings.selectedStrategyId || 'opening-breakout';
-            const strategy = (strategies as any)[selectedStrategyId];
-            if (!strategy) return;
+                const candles: Candle[] = response.data.sort((a: any, b: any) => a.time - b.time);
+                state.candles = candles;
+                state.candleIndexMap.clear();
+                candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
 
-            // 4. Run Backtest Simulation
-            const result = strategy.run(candles, {
-                type: 'backtest',
-                pair: pair,
-                capital: settings.initialCapital,
-                leverage: settings.leverage,
-                maxPositionSize: settings.maxPositionSize || 100,
-                trailingSL: settings.trailingSL !== undefined ? settings.trailingSL : true,
-                atrMultiplierSL: 1,
-                simulationStartUnix: Math.floor(startOfDay / 1000)
-            }, subCandles);
-            // 5. Persist recovered trades
-            if (result && result.trades) {
-                for (const t of result.trades) {
-                    // 🛡️ DUAL-TRADE PROTECTION: Skip if a Real/Paper trade already exists for this signal
-                    const overlap = await TradeHistoryService.findOverlap(pair, t.entryTime);
-                    if (overlap) {
-                        console.log(`[Recovery] ⏭️ Skipping recovery for ${pair} at ${t.entryTime} (Real/Paper trade found)`);
-                        continue;
-                    }
-
-                    console.log(`[Recovery] 💾 Saving trade for ${pair} at ${t.entryTime}. Trails found: ${t.trailingHistory?.length || 0}`);
-
-                    if (t.trailingHistory && t.trailingHistory.length > 0) {
-                        console.log(`[Recovery] 🔍 First trail sample: SL=${t.trailingHistory[0].sl}, Market=${t.trailingHistory[0].marketPrice}`);
-                    }
-
-
-                    await TradeHistoryService.saveTrade({
-                        ...t,
+                // 2. Fetch sub-candles (1m) if needed
+                let subCandles: Candle[] = [];
+                if (resolution !== '1') {
+                    const subRes = await CoinDCXApiService.getCandlesticks({
                         pair,
-                        type: type,
-                        status: 'closed'
+                        from: Math.floor(startOfDay / 1000),
+                        to,
+                        resolution: '1'
                     });
+                    if (subRes.s === 'ok' && Array.isArray(subRes.data)) {
+                        subCandles = subRes.data.sort((a: any, b: any) => a.time - b.time);
+                    }
+                }
+
+                // 3. Select Strategy
+                const strategy = (strategies as any)[config.strategyId];
+                if (!strategy) {
+                    console.error(`[Recovery] ❌ Strategy ${config.strategyId} not found for ${pair}`);
+                    continue;
+                }
+
+                // 4. Run Backtest Simulation for recovery
+                const result = strategy.run(candles, {
+                    type: 'backtest',
+                    pair,
+                    capital: config.initialCapital,
+                    leverage: config.leverage,
+                    maxPositionSize: config.maxPositionSize || 100,
+                    trailingSL: false,
+                    atrMultiplierSL: 1,
+                    simulationStartUnix: Math.floor(startOfDay / 1000)
+                }, subCandles);
+
+                // 5. Persist recovered trades
+                if (result && result.trades) {
+                    for (const t of result.trades) {
+                        const overlap = await TradeHistoryService.findOverlap(pair, t.entryTime);
+                        if (overlap) continue;
+
+                        console.log(`[Recovery] 💾 Saving missed trade for ${pair} at ${t.entryTime}`);
+                        await TradeHistoryService.saveTrade({
+                            ...t,
+                            pair,
+                            strategyId: config.strategyId,
+                            configId: configId,
+                            type: 'recovery',
+                            status: 'closed'
+                        });
+                    }
                 }
             }
-            console.log(`[Recovery] ✅ History recovery complete for ${pair}.`);
+
+            console.log(`[Sync] ✅ All configurations synchronized successfully.`);
         } catch (err: any) {
-            console.error('[Autonomous] Recovery Failed:', err.message);
-            SystemLogService.log('ERROR', 'RECOVERY', `Recovery Failed: ${err.message}`);
+            console.error('[Sync] ❌ Critical Error during synchronization:', err.message);
+            SystemLogService.log('ERROR', 'RECOVERY', `Sync Failed: ${err.message}`);
         }
     }
 }

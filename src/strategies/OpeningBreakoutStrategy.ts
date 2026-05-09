@@ -107,21 +107,6 @@ export class OpeningBreakoutStrategy implements Strategy {
                     const tz = params.timezone === 'IST' ? 'Asia/Kolkata' : 'UTC';
                     const scTime = tz === 'UTC' ? dayjs(sc.time).utc() : dayjs(sc.time).tz(tz);
 
-                    if (trailingSL) {
-                        const oldSL = trade.sl;
-                        OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
-
-                        // 🎯 Apply Precision Dynamically from DB
-                        const pair = params.pair || 'B-BTC_USDT';
-                        const exchangeData = TradeService.getInstrumentDetailsSync(pair);
-                        const pricePrecision = exchangeData.priceStep.toString().split('.')[1]?.length || 0;
-                        trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
-
-                        if (trade.sl !== oldSL) {
-                            console.log(`[Backtest] 📈 Trailing SL Updated: ${oldSL} -> ${trade.sl} at ${scTime.format('HH:mm:ss')} (Price: ${sc.close})`);
-                        }
-                    }
-
                     if (trade.direction === 'buy') {
                         // Check SL on 1m Low (more realistic liquidation)
                         if (trade.sl !== undefined && sc.low <= trade.sl) {
@@ -195,61 +180,6 @@ export class OpeningBreakoutStrategy implements Strategy {
         };
     }
 
-    /**
-     * Reusable Trailing Stop Loss function
-     */
-    public static updateTrailingSL(trade: Trade, candle: Candle): void {
-        const currentPrice = candle.close;
-
-        if (trade.direction === 'buy') {
-            const lastHigh = trade.lastHigh ?? trade.entryPrice;
-            if (candle.high > lastHigh) {
-                const move = candle.high - lastHigh;
-                const newSl = (trade.sl || trade.entryPrice) + move;
-
-                // Only move SL if it's a significant change (> 0.01%) to prevent spam/desync
-                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
-                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
-
-                if (newSl < currentPrice && change > threshold) {
-                    trade.sl = newSl;
-                    trade.lastHigh = candle.high;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                    // Force ensure history array exists
-                    if (!trade.trailingHistory) trade.trailingHistory = [];
-
-                    trade.trailingHistory.push({
-                        sl: Number(newSl.toFixed(4)),
-                        marketPrice: Number(currentPrice.toFixed(4)),
-                        time: dayjs(candle.time).toISOString()
-                    });
-                }
-            }
-        } else {
-            const lastLow = trade.lastLow ?? trade.entryPrice;
-            if (candle.low < lastLow) {
-                const move = lastLow - candle.low;
-                const newSl = (trade.sl || trade.entryPrice) - move;
-
-                const change = Math.abs(newSl - (trade.sl || trade.entryPrice));
-                const threshold = (trade.sl || trade.entryPrice) * 0.0001;
-
-                if (newSl > currentPrice && change > threshold) {
-                    trade.sl = newSl;
-                    trade.lastLow = candle.low;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                    console.log(trade.trailingCount, 'hitting-------123')
-                    if (!trade.trailingHistory) trade.trailingHistory = [];
-
-                    trade.trailingHistory.push({
-                        sl: Number(newSl.toFixed(4)),
-                        marketPrice: Number(currentPrice.toFixed(4)),
-                        time: dayjs(candle.time).toISOString()
-                    });
-                }
-            }
-        }
-    }
 
     private getSignal(candles: Candle[], i: number, rangeHigh: number | null, rangeLow: number | null): 'buy' | 'sell' | null {
         if (!rangeHigh || !rangeLow) return null;
@@ -318,12 +248,8 @@ export class OpeningBreakoutStrategy implements Strategy {
             sl,
             status: 'open',
             profit: 0,
-            lastHigh: entry,
-            lastLow: entry,
             units,
-            initialSL: sl,
-            trailingCount: 0,
-            trailingHistory: []
+            initialSL: sl
         };
     }
 

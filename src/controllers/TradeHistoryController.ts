@@ -35,7 +35,7 @@ export class TradeHistoryController {
             SocketService.getIO().emit('trade-history-update', null);
             
             // 🔄 Auto-Recovery: Re-populate current day's trades from 00:00 as 'recovery'
-            await SocketService.recoverTodayTrades('recovery');
+            await SocketService.syncExchangeState();
             
             res.json({ success: true });
         } catch (err: any) {
