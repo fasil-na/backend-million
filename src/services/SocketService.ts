@@ -378,7 +378,7 @@ export class SocketService {
                     const sorted = response.data.sort((a: Candle, b: Candle) => a.time - b.time);
                     registry.candles = sorted;
                     registry.candleIndexMap.clear();
-                    sorted.forEach((c, i) => registry.candleIndexMap.set(c.time, i));
+                    sorted.forEach((c:any, i:any) => registry.candleIndexMap.set(c.time, i));
                 }
             }
 
