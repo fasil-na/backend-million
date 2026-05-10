@@ -3,30 +3,11 @@ import { SettingsModel } from '../models/Settings.js';
 export interface AppSettings {
     isLiveMonitoring: boolean;
     isLiveTrading: boolean;
-    leverage: number;
-    timeInterval: string;
-    pair: string;
-    initialCapital: number;
-    selectedStrategyId: string;
-    bankBalance?: number;
-    activeTradeStatus:string;
-    riskMode:string;
-    maxPositionSize: number;
-    trailingSL: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
     isLiveMonitoring: false,
-    isLiveTrading: false,
-    leverage: 1,
-    timeInterval: '1',
-    pair: 'B-BTC_USDT',
-    initialCapital: 1000,
-    selectedStrategyId: 'opening-breakout',
-    activeTradeStatus:"closed",
-    riskMode:"minimal",
-    maxPositionSize: 100,
-    trailingSL: true
+    isLiveTrading: false
 };
 
 export class SettingsService {

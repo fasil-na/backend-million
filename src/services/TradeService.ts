@@ -22,7 +22,6 @@ export class TradeService {
      */
     static async syncInstruments() {
         const pairsToSync = ['B-BTC_USDT', 'B-ETH_USDT', 'B-XAU_USDT', 'B-SUSHI_USDT'];
-        console.log(`[InstrumentSync] 🔄 Starting daily synchronization for ${pairsToSync.length} pairs...`);
 
         for (const pair of pairsToSync) {
             try {
@@ -34,8 +33,8 @@ export class TradeService {
                     const mappedData = {
                         pair: pair,
                         maxLeverage: data.max_leverage || 20,
-                        qtyStep: pair.includes('SUSHI') ? 1 : (data.quantity_step || 0.001),
-                        priceStep: data.price_step || 0.01,
+                        qtyStep: pair.includes('SUSHI') ? 1 : (data.quantity_increment || 0.001),
+                        priceStep: data.price_increment || 0.01,
                         minNotional: data.min_notional || 6,
                         lastUpdated: new Date()
                     };
@@ -47,7 +46,6 @@ export class TradeService {
                     );
                     
                     this.instrumentCache.set(pair, mappedData);
-                    console.log(`[InstrumentSync] ✅ Synced ${pair}: QtyStep:${mappedData.qtyStep}, MinNotional:${mappedData.minNotional}`);
                 }
             } catch (err: any) {
                 console.error(`[InstrumentSync] ❌ Failed to sync ${pair}:`, err.message);
@@ -75,8 +73,8 @@ export class TradeService {
                 const mapped = {
                     pair: pair,
                     maxLeverage: data.max_leverage || 20,
-                    qtyStep: pair.includes('SUSHI') ? 1 : (data.quantity_step || 0.001),
-                    priceStep: data.price_step || 0.01,
+                    qtyStep: pair.includes('SUSHI') ? 1 : (data.quantity_increment || 0.001),
+                    priceStep: data.price_increment || 0.01,
                     minNotional: data.min_notional || 6
                 };
                 this.instrumentCache.set(pair, mapped);
@@ -172,9 +170,9 @@ export class TradeService {
         console.log('[TradeService] 🔍 Incoming Trade:', JSON.stringify(trade, null, 2));
 
         const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = await this.formatTradeParams(
-            trade.pair || settings.pair,
+            trade.pair || '',
             Number(trade.units),
-            trade.leverage || settings.leverage,
+            trade.leverage || 1,
             Number(trade.take_profit_price || trade.tp || 0),
             Number(trade.stop_loss_price || trade.sl || 0),
             trade.direction || 'buy',
@@ -327,8 +325,6 @@ export class TradeService {
             const marginBalance = balances.find((b: any) => b.currency_short_name === currency);
             if (marginBalance && marginBalance.balance !== undefined) {
                 const totalBalance = Number(marginBalance.balance);
-                const { SettingsService } = await import('./SettingsService.js');
-                await SettingsService.saveSettings({ bankBalance: totalBalance });
                 return totalBalance;
             }
         }

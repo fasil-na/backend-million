@@ -6,6 +6,10 @@ export class LiveConfigService {
         return await LiveConfigModel.find({});
     }
 
+    static async getConfigByPair(pair: string) {
+        return await LiveConfigModel.findOne({ pair });
+    }
+
     static async getEnabledConfigs() {
         return await LiveConfigModel.find({ isEnabled: true });
     }

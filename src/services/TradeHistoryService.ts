@@ -29,14 +29,12 @@ export class TradeHistoryService {
               updateData.entryTime = new Date().toISOString();
             }
 
-            console.log(`📡 DB ATTEMPT: ${updateData.pair} @ ${updateData.entryTime}.`);
 
             const result = await TradeModel.findOneAndUpdate(
                 { entryTime: updateData.entryTime },
                 updateData,
                 { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
             );
-            console.log(`✅ Trade history saved [${trade.direction}] ${trade.pair} at ${trade.entryPrice}`);
             return result;
         } catch (e: any) {
             console.error("❌ Error saving trade to MongoDB:", e.message);

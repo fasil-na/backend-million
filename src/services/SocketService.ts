@@ -20,9 +20,8 @@ import type { ILiveConfig } from '../models/LiveConfig.js';
 
 interface LiveState {
     config: any;
-    candles: Candle[];
-    candleIndexMap: Map<number, number>;
     currentPosition: Position | null;
+    activeTrade: Trade | null;
     isStrategyRunning: boolean;
     isPlacingOrder: boolean;
     isClosingPosition: boolean;
@@ -32,18 +31,10 @@ interface LiveState {
 
 export class SocketService {
     private static io: SocketIOServer;
-    private static candles: Candle[] = []; // Cache for candlestick data
-    private static lastPair: string = ''; // Track pair changes for cache invalidation
-    private static lastResolution: string = ''; // Track resolution changes
-    private static currentPosition: Position | null = null;
-    private static candleIndexMap = new Map<number, number>();
-    private static isStrategyRunning = false;
-    private static isPlacingOrder = false;
-    private static isClosingPosition = false;
-    private static lastProcessedCandleTime: number | null = null;
-    private static lastSignalTime: number | null = null;
-
     private static configStates = new Map<string, LiveState>();
+    private static marketRegistry = new Map<string, { candles: Candle[], candleIndexMap: Map<number, number> }>();
+    private static channelConfigs = new Map<string, Set<string>>();
+    private static pairConfigs = new Map<string, Set<string>>();
 
     public static getIO() {
         return SocketService.io;
@@ -64,10 +55,11 @@ export class SocketService {
         SocketService.io.on('connection', (socket) => {
             console.log('Frontend connected:', socket.id);
             socket.on('subscribe', (pair: string) => {
-                const s = SettingsService.getSettings();
-                const channel = SocketService.formatChannel(pair || s.pair, s.timeInterval);
-                console.log(`Subscribing to: ${channel}`);
-                coinDCXSocket.subscribe(channel);
+                if (pair) {
+                    const channel = SocketService.formatChannel(pair, '1');
+                    console.log(`Subscribing to: ${channel}`);
+                    coinDCXSocket.subscribe(channel);
+                }
             });
         });
 
@@ -86,10 +78,6 @@ export class SocketService {
         }
 
         coinDCXSocket.on('connected', () => {
-            const s = SettingsService.getSettings();
-            // Legacy subscription
-            coinDCXSocket.subscribe(SocketService.formatChannel(s.pair, '1'));
-            
             // Subscriptions for all active configs
             for (const state of SocketService.configStates.values()) {
                 coinDCXSocket.subscribe(SocketService.formatChannel(state.config.pair, state.config.timeInterval));
@@ -105,11 +93,30 @@ export class SocketService {
         const id = config._id.toString();
         if (SocketService.configStates.has(id)) return;
 
+        // Normalization
+        const normalizedPair = (config.pair || '').replace('B-', '').replace('_', '').toUpperCase();
+        const channel = SocketService.formatChannel(config.pair, config.timeInterval);
+        const tickerChannel = SocketService.formatChannel(config.pair, '1');
+
+        // Map config to channels and pairs
+        if (!SocketService.channelConfigs.has(channel)) SocketService.channelConfigs.set(channel, new Set());
+        SocketService.channelConfigs.get(channel)!.add(id);
+
+        if (!SocketService.channelConfigs.has(tickerChannel)) SocketService.channelConfigs.set(tickerChannel, new Set());
+        SocketService.channelConfigs.get(tickerChannel)!.add(id);
+
+        if (!SocketService.pairConfigs.has(normalizedPair)) SocketService.pairConfigs.set(normalizedPair, new Set());
+        SocketService.pairConfigs.get(normalizedPair)!.add(id);
+
+        // Initialize shared buffer if needed
+        if (!SocketService.marketRegistry.has(channel)) {
+            SocketService.marketRegistry.set(channel, { candles: [], candleIndexMap: new Map() });
+        }
+
         SocketService.configStates.set(id, {
             config,
-            candles: [],
-            candleIndexMap: new Map(),
             currentPosition: null,
+            activeTrade: null,
             isStrategyRunning: false,
             isPlacingOrder: false,
             isClosingPosition: false,
@@ -161,80 +168,90 @@ export class SocketService {
     private static setupCoinDCXListeners() {
         coinDCXSocket.on('candlestick', async (data: Candle) => {
             try {
+                const channel = (data as any).channel || SocketService.formatChannel((data as any).pair, (data as any).resolution || '1');
+              
+                if (!channel) return;
+
                 const incomingPair = (data as any).pair;
-                const incomingResolution = (data as any).resolution || '1';
-                
-                // Emit to frontend for the chart (primary pair only or all? Let's emit all for now)
-                SocketService.io.emit('candlestick', data);
-                
                 if (incomingPair) {
                     PriceStore.update(incomingPair, data.close);
                     SocketService.io.emit('price-change', { m: incomingPair, p: data.close });
                 }
+                SocketService.io.emit('candlestick', data);
 
-                // Find all configs that use this pair
-                for (const [id, state] of SocketService.configStates.entries()) {
+                const configIds = SocketService.channelConfigs.get(channel);
+                if (!configIds) return;
+
+                // 1. Update SHARED buffer for this channel
+                let registry = SocketService.marketRegistry.get(channel);
+                if (!registry) {
+                    registry = { candles: [], candleIndexMap: new Map() };
+                    SocketService.marketRegistry.set(channel, registry);
+                }
+
+                const { candles, candleIndexMap } = registry;
+                let isNewCandleTrigger = false;
+
+                if (candleIndexMap.has(data.time)) {
+                    candles[candleIndexMap.get(data.time)!] = data;
+                } else {
+                    isNewCandleTrigger = candles.length > 0;
+                    candleIndexMap.set(data.time, candles.length);
+                    candles.push(data);
+
+                    if (candles.length > 3000) {
+                        candles.shift();
+                        candleIndexMap.clear();
+                        candles.forEach((c, i) => candleIndexMap.set(c.time, i));
+                    }
+                }
+
+                const closedCandle = isNewCandleTrigger ? candles[candles.length - 2] : null;
+
+                // 2. Process all relevant configs for this channel
+                for (const id of configIds) {
+                    const state = SocketService.configStates.get(id);
+                    if (!state) continue;
                     const config = state.config;
-                    const cleanIncoming = incomingPair.replace('B-', '').replace('_', '').toUpperCase();
-                    const cleanConfig = config.pair.replace('B-', '').replace('_', '').toUpperCase();
+                    const strategy = (strategies as any)[config.strategyId];
+                    if (!strategy) continue;
 
-                    if (cleanIncoming !== cleanConfig) continue;
+                    // A. Monitor Real-time SL/TP for open trades (always on every tick)
+                    if (state.activeTrade && state.activeTrade.status === 'open') {
+                        SocketService.monitorRealTimeSL(data, id, state).catch(err => console.error(`[Monitor] ❌ ${id} Error:`, err.message));
+                    }
 
-                    // 1. Monitor Real-time SL/TP for open trades (always on every tick)
-                    // We check if this config has an open trade in DB
-                    // For performance, we could cache "hasActiveTrade" in state
-                    SocketService.monitorRealTimeSL(data, id, state).catch(err => console.error(`[Monitor] ❌ ${id} Error:`, err.message));
-
-                    // 2. Gold Strategy Pending Breakout (on 1m resolution)
-                    if (incomingResolution === '1' && config.strategyId === 'tp-gold-opening-breakout') {
-                        const strategy = strategies['tp-gold-opening-breakout'] as any;
-                        if (strategy.constructor?.checkPendingBreakout) {
-                            const result = strategy.constructor.checkPendingBreakout(data, config);
-                            if (result.matched && result.trade) {
-                                SystemLogService.log('INFO', 'STRATEGY', `🚀 Gold Pending Breakout Triggered for ${id} on 1m!`);
+                    // B. Real-time Strategy Signal (Check every tick if strategy supports it)
+                    // This replaces the hardcoded Gold breakout logic
+                    const tickCheck = strategy.checkTickSignal || (strategy.constructor as any)?.checkTickSignal;
+                    if (tickCheck) {
+                        try {
+                            const result = tickCheck(data, config, state);
+                            if (result && result.matched && result.trade) {
+                                SystemLogService.log('INFO', 'STRATEGY', `🚀 Tick Signal Triggered for ${id} (${config.strategyId})!`);
                                 SocketService.executeSignal(result.trade, id, state).catch(err => {
-                                    SystemLogService.log('ERROR', 'EXECUTION', `Failed to execute Gold breakout for ${id}: ${err.message}`);
+                                    SystemLogService.log('ERROR', 'EXECUTION', `Failed to execute tick signal for ${id}: ${err.message}`);
                                 });
                             }
+                        } catch (err: any) {
+                            console.error(`[TickCheck] ❌ ${config.strategyId} error:`, err.message);
                         }
                     }
 
-                    // 3. Main Strategy Logic (on config resolution)
-                    if (incomingResolution === config.timeInterval) {
-                        // Update internal candle buffer for this state
-                        if (state.candleIndexMap.has(data.time)) {
-                            const idx = state.candleIndexMap.get(data.time)!;
-                            state.candles[idx] = data;
-                        } else {
-                            const isNewCandleTrigger = state.candles.length > 0;
-                            state.candleIndexMap.set(data.time, state.candles.length);
-                            state.candles.push(data);
+                    // C. Main Strategy Logic (on candle close of config resolution)
+                    if (isNewCandleTrigger) {
+                         const intervalMinutes = Number(config.timeInterval || '1');
+                         const isIntervalMatch = (config.timeInterval === '1') || 
+                                               (closedCandle && new Date(closedCandle.time).getMinutes() % intervalMinutes === 0);
 
-                            if (state.candles.length > 3000) {
-                                state.candles.shift();
-                                state.candleIndexMap.clear();
-                                state.candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
+                         if (isIntervalMatch) {
+                            if (!state.isStrategyRunning) {
+                                state.isStrategyRunning = true;
+                                SocketService.executeLiveStrategy(id, state, candles)
+                                    .catch(err => SystemLogService.log('ERROR', 'STRATEGY', `Scan failed for ${id}: ${err.message}`))
+                                    .finally(() => state.isStrategyRunning = false);
                             }
-
-                            if (isNewCandleTrigger) {
-                                 const closedCandle = state.candles[state.candles.length - 2]; // The one that just finished
-                                 if (closedCandle && state.lastProcessedCandleTime !== closedCandle.time) {
-                                     state.lastProcessedCandleTime = closedCandle.time;
-                                    
-                                    // Run strategy scan if interval reached
-                                    const intervalMinutes = Number(config.timeInterval);
-                                     const currentTime = new Date(closedCandle.time);
-                                     if (closedCandle.time && currentTime.getMinutes() % intervalMinutes === 0) {
-                                        if (!state.isStrategyRunning) {
-                                            state.isStrategyRunning = true;
-                                            SocketService.executeLiveStrategy(id, state)
-                                                .catch(err => SystemLogService.log('ERROR', 'STRATEGY', `Scan failed for ${id}: ${err.message}`))
-                                                .finally(() => state.isStrategyRunning = false);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                         }
                     }
                 }
             } catch (err: any) {
@@ -293,7 +310,11 @@ export class SocketService {
                         try {
                             const activeTrade = await TradeHistoryService.getActiveTrade(id);
                             if (activeTrade && activeTrade.status === 'open') {
-                                const lastCandle = state.candles[state.candles.length - 1];
+                                const channel = SocketService.formatChannel(pair, config.timeInterval);
+                                const registry = SocketService.marketRegistry.get(channel);
+                                const lastCandle = registry?.candles && registry.candles.length > 0 
+                                    ? registry.candles[registry.candles.length - 1] 
+                                    : null;
                                 const exitPrice = lastCandle ? lastCandle.close : activeTrade.entryPrice;
 
                                 activeTrade.status = 'closed';
@@ -306,6 +327,7 @@ export class SocketService {
                                 activeTrade.fee = fee;
 
                                 await TradeHistoryService.saveTrade(activeTrade);
+                                state.activeTrade = null;
                                 SocketService.io.emit('trade-history-update', activeTrade);
                             }
                         } catch (err: any) {
@@ -317,21 +339,25 @@ export class SocketService {
         });
     }
 
-    private static async executeLiveStrategy(configId: string, state: LiveState) {
+    private static async executeLiveStrategy(configId: string, state: LiveState, sharedCandles?: Candle[]) {
         try {
             const config = state.config;
             const pair = config.pair;
-            SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: for ${pair} detected.`);
+            SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: for ${pair} detected.executeLiveStrategy`);
             // 1. Fetch latest trade for THIS CONFIG to check status
-            const activeTrade = await TradeHistoryService.getActiveTrade(configId);
-
-            if (activeTrade && activeTrade.status === 'open') {
-                return;
+            const activeTrade = state.activeTrade;
+            console.log(activeTrade,'activeTrade-----')
+            if (activeTrade) {
+                if (activeTrade.status === 'open') return;
+                state.activeTrade = null; // 🛡️ Clean up closed reference
             }
 
-            const latestCandle = state.candles[state.candles.length - 1];
+            const channel = SocketService.formatChannel(pair, config.timeInterval);
+            const registry = SocketService.marketRegistry.get(channel);
+            const candles = sharedCandles || registry?.candles || [];
+            
+            const latestCandle = candles[candles.length - 1];
             if (!latestCandle) return;
-
             // 🛑 GUARD: Prevent multiple entries for the same candle
             if (state.lastSignalTime === latestCandle.time) return;
 
@@ -340,7 +366,7 @@ export class SocketService {
             const from = Math.floor(Date.now() / 1000) - (7 * 86400);
 
             // 2. Refresh candles if buffer is missing
-            if (state.candles.length < 10) {
+            if (candles.length < 10 && registry) {
                 console.log(`[Strategy] 📥 Buffer low for ${configId}. Fetching history for ${pair}...`);
                 const response = await CoinDCXApiService.getCandlesticks({
                     pair,
@@ -349,18 +375,18 @@ export class SocketService {
                     resolution: config.timeInterval
                 });
                 if (response.s === 'ok' && Array.isArray(response.data)) {
-                    state.candles = response.data.sort((a: Candle, b: Candle) => a.time - b.time);
-                    state.candleIndexMap.clear();
-                    state.candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
+                    const sorted = response.data.sort((a: Candle, b: Candle) => a.time - b.time);
+                    registry.candles = sorted;
+                    registry.candleIndexMap.clear();
+                    sorted.forEach((c, i) => registry.candleIndexMap.set(c.time, i));
                 }
             }
 
-            if (state.candles.length === 0) return;
+            if (candles.length === 0) return;
 
             // 3. Select Strategy
             const strategy = strategies[config.strategyId as keyof typeof strategies] as any;
             if (!strategy) return;
-
             // 🎯 NEW RISK LOGIC (Fallback-free):
             let liveCapital = initialCapital;
             if (config.isLiveTrading) {
@@ -377,8 +403,7 @@ export class SocketService {
 
             // 4. Run Strategy Check
             const hasTradedToday = await TradeHistoryService.hasTradedToday(pair, config.strategyId, configId);
-            
-            const result = strategy.run(state.candles, {
+            const result = strategy.run(candles, {
                 pair: pair,
                 type: 'live',
                 capital: liveCapital,
@@ -391,10 +416,11 @@ export class SocketService {
             if ('matched' in result && result.matched && result.trade) {
                 const latest = result.trade;
                 state.lastSignalTime = latestCandle.time;
-                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: ${latest.direction} for ${pair} detected.`);
+                SystemLogService.log('INFO', 'STRATEGY', `🎯 SIGNAL [${configId}]: ${latest.direction} for ${pair} detected1111.`);
                 SocketService.io.emit('strategy-signal', { configId, pair, trade: latest });
 
-                const isRealTrade = config.isLiveTrading;
+                const globalSettings = SettingsService.getSettings();
+                const isRealTrade = config.autoTrade && globalSettings.isLiveTrading;
                 
                 if (isRealTrade) {
                     if (state.isPlacingOrder) return;
@@ -420,7 +446,7 @@ export class SocketService {
                         }
 
                         const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
-                        await TradeHistoryService.saveTrade({
+                        const savedTrade = await TradeHistoryService.saveTrade({
                             ...latest,
                             pair,
                             strategyId: config.strategyId,
@@ -431,6 +457,7 @@ export class SocketService {
                             type: 'real',
                             entryTime: new Date().toISOString()
                         });
+                        state.activeTrade = savedTrade as any;
                     } catch (err: any) {
                         const errorMessage = err.response?.data?.message || err.message;
                         SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Execution Failed for ${configId}: ${errorMessage}`);
@@ -441,7 +468,7 @@ export class SocketService {
                     // PAPER TRADE LOGIC
                     SystemLogService.log('INFO', 'EXECUTION', `📝 Executing PAPER entry for ${configId} (${latest.direction})...`);
 
-                    await TradeHistoryService.saveTrade({
+                    const savedTrade = await TradeHistoryService.saveTrade({
                         ...latest,
                         pair,
                         strategyId: config.strategyId,
@@ -452,6 +479,7 @@ export class SocketService {
                         type: 'paper',
                         entryTime: new Date().toISOString()
                     });
+                    state.activeTrade = savedTrade as any;
                 }
             }
         } catch (err: any) {
@@ -463,11 +491,13 @@ export class SocketService {
         const config = state.config;
         const pair = config.pair;
         const cleanS = (pair || '').replace('B-', '').toLowerCase();
+        const globalSettings = SettingsService.getSettings();
+        const isRealTrade = config.autoTrade && globalSettings.isLiveTrading;
 
-        SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${config.isLiveTrading ? 'REAL' : 'PAPER'} signal for ${configId}`);
+        SystemLogService.log('INFO', 'STRATEGY', `⚡ Executing ${isRealTrade ? 'REAL' : 'PAPER'} signal for ${configId}`);
         SocketService.io.emit('strategy-signal', { configId, pair, trade: latest });
 
-        if (config.isLiveTrading) {
+        if (isRealTrade) {
             if (state.isPlacingOrder) return;
             state.isPlacingOrder = true;
             try {
@@ -490,7 +520,7 @@ export class SocketService {
                 }
 
                 const entryPrice = newPos?.entry_price || PriceStore.get(pair) || latest.entryPrice;
-                await TradeHistoryService.saveTrade({
+                const savedTrade = await TradeHistoryService.saveTrade({
                     ...latest,
                     pair,
                     strategyId: config.strategyId,
@@ -501,6 +531,7 @@ export class SocketService {
                     type: 'real',
                     entryTime: new Date().toISOString()
                 });
+                state.activeTrade = savedTrade as any;
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;
                 SystemLogService.log('ERROR', 'EXECUTION', `❌ REAL Signal Failed for ${configId}: ${errorMessage}`);
@@ -509,7 +540,7 @@ export class SocketService {
             }
         } else {
             try {
-                await TradeHistoryService.saveTrade({
+                const savedTrade = await TradeHistoryService.saveTrade({
                     ...latest,
                     pair,
                     strategyId: config.strategyId,
@@ -520,6 +551,7 @@ export class SocketService {
                     type: 'paper',
                     entryTime: new Date().toISOString()
                 });
+                state.activeTrade = savedTrade as any;
                 SystemLogService.log('INFO', 'STRATEGY', `✅ PAPER trade initialized for ${configId}`);
             } catch (err: any) {
                 SystemLogService.log('ERROR', 'STRATEGY', `PAPER Execution Failed for ${configId}: ${err.message}`);
@@ -530,8 +562,11 @@ export class SocketService {
     private static async monitorRealTimeSL(tick: Candle, configId: string, state: LiveState) {
         try {
             const config = state.config;
-            const activeTrade = await TradeHistoryService.getActiveTrade(configId);
-            if (!activeTrade) return;
+            const activeTrade = state.activeTrade;
+            if (!activeTrade || activeTrade.status !== 'open') {
+                if (activeTrade && activeTrade.status !== 'open') state.activeTrade = null;
+                return;
+            }
 
             const sl = activeTrade.sl || activeTrade.stop_loss_price || 0;
             const tp = activeTrade.tp || activeTrade.take_profit_price || 0;
@@ -584,6 +619,7 @@ export class SocketService {
                 activeTrade.fee = fee;
 
                 await TradeHistoryService.saveTrade(activeTrade);
+                state.activeTrade = null; // 🛡️ CLEAR local reference after closure
                 SocketService.io.emit('trade-history-update', activeTrade);
                 state.isClosingPosition = false;
             }
@@ -614,6 +650,28 @@ export class SocketService {
         } catch (err: any) {
             console.error('[Lifecycle] ❌ Failed to refresh configs:', err.message);
         }
+    }
+
+    /**
+     * 🛡️ MEMORY SYNC: Clears a specific trade from bot memory when deleted by user.
+     */
+    public static clearActiveTradeByTime(entryTime: string) {
+        for (const [id, state] of SocketService.configStates.entries()) {
+            if (state.activeTrade && state.activeTrade.entryTime === entryTime) {
+                state.activeTrade = null;
+                console.log(`[Lifecycle] 🗑️ Cleared active trade for config ${id} from memory.`);
+            }
+        }
+    }
+
+    /**
+     * 🛡️ MEMORY SYNC: Clears ALL active trades from memory.
+     */
+    public static clearAllActiveTrades() {
+        for (const state of SocketService.configStates.values()) {
+            state.activeTrade = null;
+        }
+        console.log(`[Lifecycle] 🗑️ All active trades cleared from memory.`);
     }
 
     public static async syncExchangeState() {
@@ -655,6 +713,10 @@ export class SocketService {
 
                 console.log(`[Recovery] 🔄 Processing ${pair} [${config.strategyId}]...`);
 
+                // 🎯 Cache existing active trade for this config
+                const activeTrade = await TradeHistoryService.getActiveTrade(configId);
+                state.activeTrade = activeTrade;
+
                 // 1. Fetch main candles
                 const response = await CoinDCXApiService.getCandlesticks({
                     pair,
@@ -669,13 +731,21 @@ export class SocketService {
                 }
 
                 const candles: Candle[] = response.data.sort((a: any, b: any) => a.time - b.time);
-                state.candles = candles;
-                state.candleIndexMap.clear();
-                candles.forEach((c, i) => state.candleIndexMap.set(c.time, i));
+                const channel = SocketService.formatChannel(pair, resolution);
+                let registry = SocketService.marketRegistry.get(channel);
+                if (!registry) {
+                    registry = { candles: [], candleIndexMap: new Map() };
+                    SocketService.marketRegistry.set(channel, registry);
+                }
+                registry.candles = candles;
+                if (!registry.candleIndexMap) registry.candleIndexMap = new Map();
+                registry.candleIndexMap.clear();
+                candles.forEach((c, i) => registry.candleIndexMap!.set(c.time, i));
 
                 // 2. Fetch sub-candles (1m) if needed
                 let subCandles: Candle[] = [];
                 if (resolution !== '1') {
+                    const subChannel = SocketService.formatChannel(pair, '1');
                     const subRes = await CoinDCXApiService.getCandlesticks({
                         pair,
                         from: Math.floor(startOfDay / 1000),
@@ -684,6 +754,15 @@ export class SocketService {
                     });
                     if (subRes.s === 'ok' && Array.isArray(subRes.data)) {
                         subCandles = subRes.data.sort((a: any, b: any) => a.time - b.time);
+                        let subRegistry = SocketService.marketRegistry.get(subChannel);
+                        if (!subRegistry) {
+                            subRegistry = { candles: [], candleIndexMap: new Map() };
+                            SocketService.marketRegistry.set(subChannel, subRegistry);
+                        }
+                        subRegistry.candles = subCandles;
+                        if (!subRegistry.candleIndexMap) subRegistry.candleIndexMap = new Map();
+                        subRegistry.candleIndexMap.clear();
+                        subCandles.forEach((c, i) => subRegistry.candleIndexMap!.set(c.time, i));
                     }
                 }
 
@@ -712,7 +791,6 @@ export class SocketService {
                         const overlap = await TradeHistoryService.findOverlap(pair, t.entryTime);
                         if (overlap) continue;
 
-                        console.log(`[Recovery] 💾 Saving missed trade for ${pair} at ${t.entryTime}`);
                         await TradeHistoryService.saveTrade({
                             ...t,
                             pair,
@@ -723,6 +801,8 @@ export class SocketService {
                         });
                     }
                 }
+                        console.log(`[Recovery] 💾 Saving missed trade for ${pair}-------`);
+
             }
 
             console.log(`[Sync] ✅ All configurations synchronized successfully.`);

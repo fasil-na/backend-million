@@ -462,7 +462,7 @@ export class TpGoldOpeningBreakout implements Strategy {
         return { matched: false }; // We only return matched:true in checkPendingBreakout
     }
 
-    public static checkPendingBreakout(candle: Candle, params: any): { matched: boolean, trade?: Trade } {
+    public static checkTickSignal(candle: Candle, params: any): { matched: boolean, trade?: Trade } {
         if (!TpGoldOpeningBreakout.pendingBreakout) return { matched: false };
 
         const pb = TpGoldOpeningBreakout.pendingBreakout;

@@ -9,6 +9,7 @@ export interface ILiveConfig {
     initialCapital: number;
     isEnabled: boolean;
     isLiveTrading: boolean;
+    autoTrade: boolean;
     riskMode: 'minimal' | 'capital';
     maxPositionSize: number;
 }
@@ -21,6 +22,7 @@ const liveConfigSchema = new mongoose.Schema({
     initialCapital: { type: Number, default: 1000 },
     isEnabled: { type: Boolean, default: true },
     isLiveTrading: { type: Boolean, default: false },
+    autoTrade: { type: Boolean, default: false },
     riskMode: { type: String, enum: ['minimal', 'capital'], default: 'minimal' },
     maxPositionSize: { type: Number, default: 100 }
 }, {

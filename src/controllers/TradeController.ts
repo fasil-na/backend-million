@@ -3,8 +3,9 @@ import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import { TradeService } from '../services/TradeService.js';
 import { SettingsService } from '../services/SettingsService.js';
 import { TradeHistoryService } from '../services/TradeHistoryService.js';
-import { calculateATR } from '../strategies/StrategyUtils.js';
+import { calculateATR, formatPair } from '../strategies/StrategyUtils.js';
 import { PriceStore } from '../services/PriceStore.js';
+import { LiveConfigService } from '../services/LiveConfigService.js';
 
 export class TradeController {
     static async execute(req: Request, res: Response) {
@@ -24,15 +25,22 @@ export class TradeController {
             const settings = SettingsService.getSettings();
 
             if (!settings.isLiveTrading) {
-                return res.status(400).json({ error: 'Live trading is disabled. Manual trades can only be executed in live mode.' });
+                return res.status(400).json({ error: 'Global Live Trading toggle is OFF. Manual trades blocked.' });
             }
 
-            const leverage = settings.leverage || 1;
-            const activePair = bodyPair || settings.pair;
+            // 🎯 NEW: Look up configuration for this pair (Normalized to B-XXXX_USDT)
+            const activePair = formatPair(bodyPair || 'B-BTC_USDT');
+            const pairConfig = await LiveConfigService.getConfigByPair(activePair);
+            
+            if (!pairConfig) {
+                return res.status(400).json({ error: `No configuration found for pair: ${activePair}. Please create one in Live Configurations.` });
+            }
+
+            const leverage = pairConfig.leverage || 1;
             const entryPrice = await PriceStore.getOrFetch(activePair);
 
             if (!entryPrice || entryPrice <= 0) {
-                return res.status(400).json({ error: 'Could not determine entry price. Please wait for market data or provide a manual price.' });
+                return res.status(400).json({ error: 'Could not determine entry price.' });
             }
 
             // Fetch recent candles for ATR-based SL calculation
@@ -47,31 +55,26 @@ export class TradeController {
             let calculatedSL = 0;
             if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
                 let atr = calculateATR(candleRes.data, 14);
-                
-                if (atr === 0 || atr < (entryPrice * 0.001)) {
-                    atr = entryPrice * 0.01;
-                }
+                if (atr === 0 || atr < (entryPrice * 0.001)) atr = entryPrice * 0.01;
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
             } else {
                 const fallbackAtr = entryPrice * 0.01;
                 calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - fallbackAtr : entryPrice + fallbackAtr;
             }
             
-            // 🎯 TP GOLD STRATEGY: Calculate TP based on 1:1.9 RR ratio
             const riskAmount = Math.abs(entryPrice - calculatedSL);
             const calculatedTP = side.toLowerCase() === 'buy' 
                 ? entryPrice + (riskAmount * 1.9) 
                 : entryPrice - (riskAmount * 1.9);
 
-            const rawPair = activePair;
-            const exchangeData = await TradeService.getInstrumentDetails(rawPair);
+            const exchangeData = await TradeService.getInstrumentDetails(activePair);
             const minNotional = exchangeData.minNotional || 6;
             const step = exchangeData.qtyStep || 0.001;
 
-            // 🎯 RISK CALCULATION:
+            // 🎯 RISK CALCULATION using pair config:
             let quantityNum = 0;
-            if (settings.riskMode === 'capital') {
-                const capitalToUse = settings.initialCapital || 100;
+            if (pairConfig.riskMode === 'capital') {
+                const capitalToUse = pairConfig.initialCapital || 100;
                 quantityNum = Math.floor(((capitalToUse * leverage) / entryPrice) / step) * step;
                 const minQty = Math.ceil((minNotional / entryPrice) / step) * step;
                 if (quantityNum < minQty) quantityNum = minQty;
@@ -79,7 +82,7 @@ export class TradeController {
                 quantityNum = Math.ceil((minNotional / entryPrice) / step) * step;
             }
 
-            const formattedParams = await TradeService.formatTradeParams(rawPair, quantityNum, leverage, calculatedTP, calculatedSL, side, entryPrice);
+            const formattedParams = await TradeService.formatTradeParams(activePair, quantityNum, leverage, calculatedTP, calculatedSL, side, entryPrice);
          
             try {
                 const result = await executeWithRetry(() =>
@@ -104,9 +107,9 @@ export class TradeController {
                     tp: formattedParams.tpPrice > 0 ? formattedParams.tpPrice : undefined,
                     status: 'open',
                     profit: 0,
-                    type: 'real'
+                    type: 'real',
+                    configId: pairConfig._id?.toString()
                 });
-                      await SettingsService.saveSettings({ activeTradeStatus: 'open' });
                 return res.json(result);
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;

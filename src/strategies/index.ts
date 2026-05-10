@@ -21,7 +21,7 @@ import { FVGStrategy } from './FVGStrategy.js';
 
 export const strategies: Record<string, Strategy> = {
     // 'opening-breakout': new OpeningBreakoutStrategy(),
-    // 'ema-crossover': new EmaCrossoverStrategy(),
+    'ema-crossover': new EmaCrossoverStrategy(),
     'tp-gold-opening-breakout': new TpGoldOpeningBreakout(),
     'gold-opening-breakout': new GoldOpeningBreakout(),
     'fvg-imbalance': new FVGStrategy()

@@ -21,7 +21,6 @@ export class StrategyController {
 
     static async runBacktest(req: Request, res: Response) {
         try {
-            console.log('calling bactest route---')
             const {
                 isLive, from, to, month, year, startYear, startMonth, endYear, endMonth,
                 pair = "B-BTC_USDT", resolution = "5", timezone = "UTC"
@@ -64,9 +63,7 @@ export class StrategyController {
                 let end = Math.floor(period.end.valueOf() / 1000);
                 let fetchStart = simStart - (7 * 24 * 60 * 60);
 
-                console.log(`[Controller] 📅 Backtest Period: ${period.start.format('YYYY-MM-DD HH:mm:ss Z')} to ${period.end.format('YYYY-MM-DD HH:mm:ss Z')}`);
-                console.log(`[Controller] 🕒 simStart: ${simStart} (${dayjs.unix(simStart).utc().format('YYYY-MM-DD HH:mm:ss')} UTC)`);
-
+            
                 if (isLive) {
                     simStart = Math.floor((timezone === 'IST' ? dayjs().tz('Asia/Kolkata').startOf('day') : dayjs().utc().startOf('day')).valueOf() / 1000);
                     fetchStart = simStart - (7 * 24 * 60 * 60);

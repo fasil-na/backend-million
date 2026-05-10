@@ -17,6 +17,10 @@ export class TradeHistoryController {
         try {
             const { entryTime } = req.params;
             await TradeHistoryService.deleteTrade(entryTime as string);
+            
+            // 🛡️ Sync Memory: Remove from bot tracking if it was an active trade
+            SocketService.clearActiveTradeByTime(entryTime as string);
+            
             res.json({ success: true });
         } catch (err: any) {
             res.status(500).json({ error: err.message });
@@ -27,11 +31,10 @@ export class TradeHistoryController {
         try {
             await TradeHistoryService.clearAll();
             
-            // 🔄 Reset internal status to closed
-            const updatedSettings = await SettingsService.saveSettings({ activeTradeStatus: 'closed' });
+            // 🛡️ Sync Memory: Stop tracking all currently active trades
+            SocketService.clearAllActiveTrades();
             
-            // Notify all clients that settings and history have been reset
-            SocketService.getIO().emit('settings-update', updatedSettings);
+            // Notify all clients that history has been reset
             SocketService.getIO().emit('trade-history-update', null);
             
             // 🔄 Auto-Recovery: Re-populate current day's trades from 00:00 as 'recovery'
