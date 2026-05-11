@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { strategies } from '../strategies/index.js';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import type { Candle, Trade } from '../types/index.js';
+import { TradeModel } from '../models/Trade.js';
 
 export class StrategyController {
     static getList(req: Request, res: Response) {
@@ -110,6 +111,71 @@ export class StrategyController {
                 }
             });
         } catch (err: any) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+    static async getFVGAnalysis(req: Request, res: Response) {
+        try {
+            const { date, pair = "B-BTC_USDT", resolution = "1" } = req.query;
+            if (!date) return res.status(400).json({ error: 'Date is required' });
+
+            const targetDate = dayjs(date as string).tz('Asia/Kolkata');
+            const start = Math.floor(targetDate.startOf('day').valueOf() / 1000);
+            const end = Math.floor(targetDate.endOf('day').valueOf() / 1000);
+            
+            // To detect FVG correctly, we need some candles before the start of the day
+            const fetchStart = start - (24 * 60 * 60); // 1 day before for indicators
+
+            console.log(`[FVGAnalysis] 🔍 Fetching data for ${pair} (${resolution}m) on ${date}...`);
+
+            const [resMain, resSub] = await Promise.all([
+                CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: end, resolution: resolution as string }),
+                CoinDCXApiService.getCandlesticks({ pair, from: fetchStart, to: end, resolution: '1' }).catch(() => ({ s: 'error', data: [] }))
+            ]);
+
+            if (resMain.s !== 'ok' || !Array.isArray(resMain.data)) {
+                return res.status(400).json({ error: 'Failed to fetch 5m data' });
+            }
+
+            const candles = resMain.data.sort((a: Candle, b: Candle) => a.time - b.time);
+            const subCandles = Array.isArray(resSub.data) ? resSub.data.sort((a: Candle, b: Candle) => a.time - b.time) : [];
+
+            const strategy = strategies['fvg-imbalance'] as any;
+            if (!strategy) return res.status(404).json({ error: 'FVG strategy not found' });
+
+            // 1. Run strategy simulation ONLY for indicators (FVG boxes)
+            const simulationResult = strategy.run(candles, {
+                pair,
+                leverage: 1,
+                capital: 1000,
+                simulationStartUnix: start,
+                type: 'backtest'
+            }, subCandles);
+
+            // 2. Fetch REAL executed trades from Database for this pair/day
+            const startStr = targetDate.startOf('day').format();
+            const endStr = targetDate.endOf('day').format();
+            
+            const realTrades = await TradeModel.find({
+                pair: pair as string,
+                entryTime: { $gte: startStr, $lte: endStr },
+                // Optionally filter for FVG strategy only if you want strict parity
+                // strategyId: 'fvg-imbalance' 
+            }).lean();
+
+            // Return real data for the UI
+            res.json({
+                date: date,
+                pair: pair,
+                trades: realTrades,
+                tradesCount: realTrades.length,
+                dailyPnl: realTrades.reduce((a: number, t: any) => a + (t.profit || 0), 0),
+                candles: candles.filter((c: Candle) => c.time >= start * 1000), 
+                indicators: (simulationResult as any).indicators
+            });
+
+        } catch (err: any) {
+            console.error('FVG Analysis Error:', err.message);
             res.status(500).json({ error: err.message });
         }
     }
