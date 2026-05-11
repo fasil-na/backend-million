@@ -24,7 +24,12 @@ const tradeSchema = new mongoose.Schema({
     trailingCount: Number,
     type: { type: String, enum: ['manual', 'auto', 'paper', 'real'], default: 'auto' },
     pair: String,
-    executionError: String
+    configId: String,
+    strategyId: String,
+    executionError: String,
+    pnlPercent: Number,
+    indicators: mongoose.Schema.Types.Mixed,
+    initialSL: Number
 }, {
     timestamps: true
 });

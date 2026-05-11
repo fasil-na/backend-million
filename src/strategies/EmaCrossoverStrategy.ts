@@ -26,7 +26,7 @@ export class EmaCrossoverStrategy implements Strategy {
         const {
             feeRate = 0.0005,
             simulationStartUnix = 0,
-            trailingSL = true
+            rrRatio = 2.0
         } = params;
 
         let currentBalance = capital;
@@ -65,28 +65,29 @@ export class EmaCrossoverStrategy implements Strategy {
                 for (const sc of simulationPass) {
                     const scTime = dayjs(sc.time).tz('Asia/Kolkata');
 
-                    if (trailingSL) {
-                        EmaCrossoverStrategy.updateTrailingSL(trade, sc);
-                        // 🎯 Round SL dynamically
-                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-                        trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
-                    }
-
                     if (trade.direction === 'buy') {
                         if (trade.sl !== undefined && sc.low <= trade.sl) {
                             trade.exitPrice = trade.sl;
                             trade.exitReason = 'SL';
                             trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
+                            trade.exitTime = scTime.format();
+                        } else if (trade.tp !== undefined && sc.high >= trade.tp) {
+                            trade.exitPrice = trade.tp;
+                            trade.exitReason = 'TP';
+                            trade.status = 'closed';
+                            trade.exitTime = scTime.format();
                         }
                     } else {
                         if (trade.sl !== undefined && sc.high >= trade.sl) {
                             trade.exitPrice = trade.sl;
                             trade.exitReason = 'SL';
                             trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
+                            trade.exitTime = scTime.format();
+                        } else if (trade.tp !== undefined && sc.low <= trade.tp) {
+                            trade.exitPrice = trade.tp;
+                            trade.exitReason = 'TP';
+                            trade.status = 'closed';
+                            trade.exitTime = scTime.format();
                         }
                     }
 
@@ -109,12 +110,12 @@ export class EmaCrossoverStrategy implements Strategy {
                         trade.exitPrice = c.close;
                         trade.exitReason = 'Signal Reversal';
                         trade.status = 'closed';
-                        trade.exitTime = dayjs(c.time).tz('Asia/Kolkata').toISOString();
+                        trade.exitTime = dayjs(c.time).tz('Asia/Kolkata').format();
                     } else if (trade.direction === 'sell' && fastEma > slowEma) {
                         trade.exitPrice = c.close;
                         trade.exitReason = 'Signal Reversal';
                         trade.status = 'closed';
-                        trade.exitTime = dayjs(c.time).tz('Asia/Kolkata').toISOString();
+                        trade.exitTime = dayjs(c.time).tz('Asia/Kolkata').format();
                     }
 
                     if (trade.status === 'closed') {
@@ -139,38 +140,6 @@ export class EmaCrossoverStrategy implements Strategy {
         return { trades: allTrades, finalBalance: currentBalance, activeTrade: currentTrade };
     }
 
-    public static updateTrailingSL(trade: Trade, candle: Candle): void {
-        const currentPrice = candle.close;
-        
-        if (trade.direction === 'buy') {
-            const lastHigh = trade.lastHigh ?? trade.entryPrice;
-            if (candle.high > lastHigh) {
-                const move = candle.high - lastHigh;
-                const newSl = (trade.sl || trade.entryPrice) + move;
-                
-                // If the new SL jumped above the current closing price (retrace), skip this update completely
-                // to prevent breaking the SL-to-High geometric distance and avoid exchange rejection.
-                if (newSl < currentPrice) {
-                    trade.sl = newSl;
-                    trade.lastHigh = candle.high;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                }
-            }
-        } else {
-            const lastLow = trade.lastLow ?? trade.entryPrice;
-            if (candle.low < lastLow) {
-                const move = lastLow - candle.low;
-                const newSl = (trade.sl || trade.entryPrice) - move;
-                
-                // If new SL dropped below current closing price, skip update
-                if (newSl > currentPrice) {
-                    trade.sl = newSl;
-                    trade.lastLow = candle.low;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                }
-            }
-        }
-    }
 
     private getSignal(candles: Candle[], i: number): 'buy' | 'sell' | null {
         if (i < 21) return null;
@@ -194,11 +163,16 @@ export class EmaCrossoverStrategy implements Strategy {
         const atr = this.calculateATR(candles, 14, i);
         let sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
 
-        // 🎯 Enforce Native Precision Rules on Entry Stop Loss
+        const risk = Math.abs(entry - sl);
+        const rrRatio = params.rrRatio || 2.0;
+        let tp = direction === 'buy' ? entry + (risk * rrRatio) : entry - (risk * rrRatio);
+
+        // 🎯 Enforce Native Precision Rules
         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
         sl = Number(sl.toFixed(pricePrecision));
+        tp = Number(tp.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {
             capital: balance,
@@ -208,14 +182,13 @@ export class EmaCrossoverStrategy implements Strategy {
         });
 
         return {
-            entryTime: dayjs(c.time).tz('Asia/Kolkata').toISOString(),
+            entryTime: dayjs(c.time).tz('Asia/Kolkata').format(),
             direction,
             entryPrice: entry,
             sl,
+            tp,
             status: 'open',
             profit: 0,
-            lastHigh: entry,
-            lastLow: entry,
             units
         };
     }

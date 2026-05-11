@@ -1,78 +1,102 @@
 import { type Request, type Response } from 'express';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import { TradeService } from '../services/TradeService.js';
 import { SettingsService } from '../services/SettingsService.js';
 import { TradeHistoryService } from '../services/TradeHistoryService.js';
 import { calculateATR } from '../strategies/StrategyUtils.js';
 import { PriceStore } from '../services/PriceStore.js';
+import { SocketService } from '../services/SocketService.js';
+import { LiveConfigService } from '../services/LiveConfigService.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export class TradeController {
     static async execute(req: Request, res: Response) {
         try {
-            const apiKey = process.env.COINDCX_API_KEY;
-            const apiSecret = process.env.COINDCX_API_SECRET;
-
-            if (!apiKey || !apiSecret) {
-                return res.status(400).json({ error: 'Backend API Key and Secret are not configured for Live Trading' });
+            const { side, configId, pair: bodyPair, slPrice: manualSL, overrideQuantity } = req.body;
+            
+            if (!side || !configId) {
+                return res.status(400).json({ error: 'Missing side or configId' });
             }
 
-            const { side, pair: bodyPair } = req.body;
-            if (!side || !['buy', 'sell'].includes(side.toLowerCase())) {
-                return res.status(400).json({ error: 'Invalid side. Must be "buy" or "sell".' });
-            }
+            const config = await LiveConfigService.getConfig(configId);
+            if (!config) return res.status(404).json({ error: 'Configuration not found' });
 
-            const settings = SettingsService.getSettings();
-
-            if (!settings.isLiveTrading) {
-                return res.status(400).json({ error: 'Live trading is disabled. Manual trades can only be executed in live mode.' });
-            }
-
-            const leverage = settings.leverage || 1;
-            const activePair = bodyPair || settings.pair;
-            const entryPrice = await PriceStore.getOrFetch(activePair);
-
+            const pair = bodyPair || config.pair;
+            
+            const entryPrice = await PriceStore.getOrFetch(pair);
             if (!entryPrice || entryPrice <= 0) {
-                return res.status(400).json({ error: 'Could not determine entry price. Please wait for market data or provide a manual price.' });
+                return res.status(400).json({ error: 'Could not determine entry price.' });
             }
 
-            // Fetch recent candles for ATR-based SL calculation
-            const now = Math.floor(Date.now() / 1000);
-            const candleRes = await CoinDCXApiService.getCandlesticks({
-                pair: activePair,
-                resolution: '1',
-                from: now - 86400, // last 24 hours
-                to: now
-            });
+            // Handle existing trades for the same pair
+            const existingTrade = await TradeHistoryService.getActiveTradeByPair(pair);
+            if (existingTrade) {
+                if (existingTrade.direction !== side.toLowerCase()) {
+                    // Opposite side - CLOSE the existing trade
+                    console.log(`[TradeController] 🔄 Opposite side detected. Closing existing ${existingTrade.direction} trade for ${pair}...`);
+                    
+                    try {
+                        // 1. Get positions from exchange to find the ID
+                        const positions = await TradeService.getPositions();
+                        const exchangePos = Array.isArray(positions) ? positions.find((p: any) => p.pair === pair) : null;
+                        
+                        let closeResult;
+                        if (exchangePos && (exchangePos.id || exchangePos.position_id)) {
+                            const posId = exchangePos.id || exchangePos.position_id;
+                            closeResult = await TradeService.closePosition({ positionId: posId });
+                        }
 
-            let calculatedSL = 0;
-            if (candleRes && candleRes.s === 'ok' && Array.isArray(candleRes.data)) {
-                let atr = calculateATR(candleRes.data, 14);
-                if (atr === 0 || atr < (entryPrice * 0.001)) {
-                    atr = entryPrice * 0.01;
+                        // 2. Update trade history
+                        await TradeHistoryService.saveTrade({
+                            ...existingTrade,
+                            status: 'closed',
+                            exitPrice: entryPrice,
+                            exitTime: dayjs().tz('Asia/Kolkata').format(),
+                            exitReason: 'Manual Close'
+                        });
+                        
+                        await SocketService.syncActiveTrade(configId);
+                        return res.json({ 
+                            message: 'Position closed successfully', 
+                            closed: true,
+                            result: closeResult 
+                        });
+                    } catch (err: any) {
+                        console.error('Failed to close position:', err.message);
+                        return res.status(500).json({ error: 'Failed to close existing position', details: err.message });
+                    }
+                } else {
+                    return res.status(400).json({ error: `A ${existingTrade.direction} trade is already open for ${pair}.` });
                 }
-                calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - atr : entryPrice + atr;
-            } else {
-                const fallbackAtr = entryPrice * 0.01;
-                calculatedSL = side.toLowerCase() === 'buy' ? entryPrice - fallbackAtr : entryPrice + fallbackAtr;
             }
 
-            const rawPair = activePair;
-            const staticData = TradeService.STATIC_INSTRUMENTS[rawPair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-            const minNotional = staticData.minNotional || 6;
-            const step = staticData.qtyStep;
+            const leverage = config.leverage || 10;
 
-            // 🎯 RISK CALCULATION:
+            const details = await TradeService.getInstrumentDetails(pair);
+            const step = details.quantity_increment || 0.001;
+
             let quantityNum = 0;
-            if (settings.riskMode === 'capital') {
-                const capitalToUse = settings.initialCapital || 100;
-                quantityNum = Math.floor(((capitalToUse * leverage) / entryPrice) / step) * step;
-                const minQty = Math.ceil((minNotional / entryPrice) / step) * step;
-                if (quantityNum < minQty) quantityNum = minQty;
+            if (overrideQuantity) {
+                quantityNum = overrideQuantity;
             } else {
-                quantityNum = Math.ceil((minNotional / entryPrice) / step) * step;
+                if (config.riskMode === 'minimal') {
+                    // For minimal risk, we just set a tiny quantity.
+                    // TradeService.formatTradeParams will automatically bump it up to the exchange's minimum notional (e.g. $6.5)
+                    quantityNum = step; 
+                } else {
+                    const capital = config.initialCapital || 100;
+                    quantityNum = Math.floor(((capital * leverage) / entryPrice) / step) * step;
+                }
             }
 
-            const formattedParams = TradeService.formatTradeParams(rawPair, quantityNum, leverage, 0, calculatedSL, side, entryPrice);
+            const sl = manualSL || (side === 'buy' ? entryPrice * 0.95 : entryPrice * 1.05);
+
+            const formattedParams = TradeService.formatTradeParams(pair, quantityNum, leverage, 0, sl, side, entryPrice);
          
             try {
                 const result = await executeWithRetry(() =>
@@ -81,39 +105,29 @@ export class TradeController {
                         pair: formattedParams.pair,
                         entryPrice: entryPrice,
                         units: formattedParams.qty,
-                        stop_loss_price: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                        stop_loss_price: formattedParams.slPrice,
                         leverage: formattedParams.maxLeverage
                     })
                 );
 
                 await TradeHistoryService.saveTrade({
-                    entryTime: new Date().toISOString(),
+                    entryTime: dayjs().tz('Asia/Kolkata').format(),
                     direction: side,
                     pair: formattedParams.pair,
+                    configId,
+                    strategyId: config.strategyId || 'manual',
                     entryPrice: entryPrice,
                     units: formattedParams.qty,
-                    sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
+                    sl: formattedParams.slPrice,
                     status: 'open',
                     profit: 0,
-                    type: 'real'
+                    type: 'manual'
                 });
-                      await SettingsService.saveSettings({ activeTradeStatus: 'open' });
+
+                await SocketService.syncActiveTrade(configId);
                 return res.json(result);
             } catch (err: any) {
                 const errorMessage = err.response?.data?.message || err.message;
-                await TradeHistoryService.saveTrade({
-                    entryTime: new Date().toISOString(),
-                    direction: side,
-                    pair: formattedParams.pair,
-                    entryPrice: entryPrice,
-                    units: formattedParams.qty,
-                    sl: formattedParams.slPrice > 0 ? formattedParams.slPrice : undefined,
-                    status: 'failed',
-                    profit: 0,
-                    type: 'real',
-                    executionError: errorMessage
-                });
-
                 return res.status(400).json({ error: 'Exchange Execution Failed', details: errorMessage });
             }
         } catch (error: any) {

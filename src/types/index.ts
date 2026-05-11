@@ -21,7 +21,12 @@ export interface Trade {
     trailingCount?: number | undefined;
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;
     pair?: string | undefined;
+    configId?: string | undefined;
+    strategyId?: string | undefined;
     executionError?: string | undefined;
+    pnlPercent?: number | undefined;
+    indicators?: any | undefined;
+    initialSL?: number | undefined;
 }
 
 export interface Candle {

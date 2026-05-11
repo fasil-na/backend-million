@@ -35,9 +35,10 @@ export class TradeService {
     }
 
     public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
-        'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1,minNotional:6  },
-        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001,minNotional:6 },
-        'SUSHIUSDT':{ maxLeverage: 10, qtyStep: 1, priceStep: 0.0001,minNotional:6 },
+        'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1, minNotional: 6 },
+        'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001, minNotional: 6 },
+        'B-XAU_USDT': { maxLeverage: 20, qtyStep: 0.01, priceStep: 0.01, minNotional: 6 },
+        'SUSHIUSDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001, minNotional: 6 },
     };
 
     static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0) {
@@ -69,7 +70,7 @@ export class TradeService {
     }
 
     // final excecution of trade
-    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
+    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
         const { apiKey, apiSecret } = this.credentials;
 console.log(trade,'trade------')
         if (!apiKey || !apiSecret) {

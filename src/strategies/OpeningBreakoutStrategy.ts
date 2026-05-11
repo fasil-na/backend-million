@@ -26,7 +26,8 @@ console.log(type,'type-----')
         const {
             feeRate = 0.0005,
             simulationStartUnix = 0,
-            atrMultiplierSL = 1.0
+            atrMultiplierSL = 1.0,
+            rrRatio = 2.0
         } = params;
 
 
@@ -110,30 +111,35 @@ console.log(type,'type-----')
                 for (const sc of simulationPass) {
                     const scTime = dayjs(sc.time).tz('Asia/Kolkata');
 
-                    if (trailingSL) {
-                        OpeningBreakoutStrategy.updateTrailingSL(trade, sc);
-                        // 🎯 Round SL dynamically exactly like the Live execution does
-                        const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
-                        const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
-                        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-                        trade.sl = Number((trade.sl ?? trade.entryPrice).toFixed(pricePrecision));
-                    }
-
                     if (trade.direction === 'buy') {
-                        // Check SL on 1m Low (more realistic liquidation)
+                        // Check SL on 1m Low
                         if (trade.sl !== undefined && sc.low <= trade.sl) {
                             trade.exitPrice = trade.sl;
-                            trade.exitReason = 'SL (1m)';
+                            trade.exitReason = 'SL';
                             trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
+                            trade.exitTime = scTime.format();
+                        }
+                        // Check TP on 1m High
+                        else if (trade.tp !== undefined && sc.high >= trade.tp) {
+                            trade.exitPrice = trade.tp;
+                            trade.exitReason = 'TP';
+                            trade.status = 'closed';
+                            trade.exitTime = scTime.format();
                         }
                     } else {
                         // Check SL on 1m High
                         if (trade.sl !== undefined && sc.high >= trade.sl) {
                             trade.exitPrice = trade.sl;
-                            trade.exitReason = 'SL (1m)';
+                            trade.exitReason = 'SL';
                             trade.status = 'closed';
-                            trade.exitTime = scTime.toISOString();
+                            trade.exitTime = scTime.format();
+                        }
+                        // Check TP on 1m Low
+                        else if (trade.tp !== undefined && sc.low <= trade.tp) {
+                            trade.exitPrice = trade.tp;
+                            trade.exitReason = 'TP';
+                            trade.status = 'closed';
+                            trade.exitTime = scTime.format();
                         }
                     }
 
@@ -155,7 +161,7 @@ console.log(type,'type-----')
                 if (signal) {
                     direction = signal;
                     waiting = true;
-                    lastBreakoutTime = time.toISOString();
+                    lastBreakoutTime = time.format();
                 }
             } else {
                 currentTrade = this.calculateEntryParams(c, direction!, candles, i, currentBalance, params);
@@ -168,41 +174,6 @@ console.log(type,'type-----')
         return { trades: allTrades, finalBalance: currentBalance, activeTrade: currentTrade };
     }
 
-    /**
-     * Reusable Trailing Stop Loss function
-     */
-    public static updateTrailingSL(trade: Trade, candle: Candle): void {
-        const currentPrice = candle.close;
-        
-        if (trade.direction === 'buy') {
-            const lastHigh = trade.lastHigh ?? trade.entryPrice;
-            if (candle.high > lastHigh) {
-                const move = candle.high - lastHigh;
-                const newSl = (trade.sl || trade.entryPrice) + move;
-                
-                // If the new SL jumped above the current closing price (retrace), skip this update completely
-                // to prevent breaking the SL-to-High geometric distance and avoid exchange rejection.
-                if (newSl < currentPrice) {
-                    trade.sl = newSl;
-                    trade.lastHigh = candle.high;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                }
-            }
-        } else {
-            const lastLow = trade.lastLow ?? trade.entryPrice;
-            if (candle.low < lastLow) {
-                const move = lastLow - candle.low;
-                const newSl = (trade.sl || trade.entryPrice) - move;
-                
-                // If new SL dropped below current closing price, skip update
-                if (newSl > currentPrice) {
-                    trade.sl = newSl;
-                    trade.lastLow = candle.low;
-                    trade.trailingCount = (trade.trailingCount || 0) + 1;
-                }
-            }
-        }
-    }
 
     private getSignal(candles: Candle[], i: number, rangeHigh: number | null, rangeLow: number | null): 'buy' | 'sell' | null {
         if (!rangeHigh || !rangeLow) return null;
@@ -232,12 +203,17 @@ console.log(type,'type-----')
         const entry = c.close;
         const atr = this.calculateATR(candles, 14, i);
         let sl = direction === 'buy' ? entry - atr * atrMultiplierSL : entry + atr * atrMultiplierSL;
+        
+        const risk = Math.abs(entry - sl);
+        const rrRatio = params.rrRatio || 2.0;
+        let tp = direction === 'buy' ? entry + (risk * rrRatio) : entry - (risk * rrRatio);
 
-        // 🎯 Enforce Native Precision Rules on Entry Stop Loss
+        // 🎯 Enforce Native Precision Rules
         const cleanPair = (params.pair || '').replace('B-', '').toLowerCase();
         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-' + params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
         sl = Number(sl.toFixed(pricePrecision));
+        tp = Number(tp.toFixed(pricePrecision));
 
         const units = calculateUnits(entry, sl, {
             capital: balance,
@@ -247,14 +223,13 @@ console.log(type,'type-----')
         });
 
         return {
-            entryTime: dayjs(c.time).tz('Asia/Kolkata').toISOString(),
+            entryTime: dayjs(c.time).tz('Asia/Kolkata').format(),
             direction,
             entryPrice: entry,
             sl,
+            tp,
             status: 'open',
             profit: 0,
-            lastHigh: entry,
-            lastLow: entry,
             units
         };
     }
