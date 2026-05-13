@@ -8,7 +8,8 @@ const liveConfigSchema = new mongoose.Schema({
     initialCapital: { type: Number, default: 100 },
     riskMode: { type: String, default: 'minimal' },
     autoTrade: { type: Boolean, default: false },
-    isEnabled: { type: Boolean, default: true }
+    isEnabled: { type: Boolean, default: true },
+    maxPositionSize: { type: Number, default: 100 }
 }, {
     timestamps: true
 });

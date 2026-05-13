@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { SettingsService } from './SettingsService.js';
 import { formatPair } from '../strategies/StrategyUtils.js';
 import type { Trade } from '../types/index.js';
+import { LoggerService } from './LoggerService.js';
 
 export class TradeService {
     private static get credentials() {
@@ -34,6 +35,8 @@ export class TradeService {
         return null;
     }
 
+    public static readonly TEST_RISK_AMOUNT = 0.5 // Reduced to $0.10 for minimal risk testing with $4.6 wallet
+
     public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
         'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1, minNotional: 6 },
         'B-SUSHI_USDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001, minNotional: 6 },
@@ -41,7 +44,7 @@ export class TradeService {
         'SUSHIUSDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001, minNotional: 6 },
     };
 
-    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0) {
+    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0, maxNotional: number = 100) {
         const pair = formatPair(rawPair);
         const staticData = this.STATIC_INSTRUMENTS[pair] || this.STATIC_INSTRUMENTS['B-BTC_USDT'];
         
@@ -50,7 +53,17 @@ export class TradeService {
         const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
         let qty = Number(Number(rawQty).toFixed(qtyPrecision));
 
-        // Enforce minimum quantity based on minimum notional requirement
+        // 1. Cap by maxNotional to prevent 'Insufficient funds'
+        if (entryPrice > 0) {
+            const currentNotional = qty * entryPrice;
+            if (currentNotional > maxNotional) {
+                console.log(`⚠️ Capping notional from $${currentNotional.toFixed(2)} to $${maxNotional.toFixed(2)}`);
+                qty = maxNotional / entryPrice;
+                qty = Math.floor(qty / staticData.qtyStep) * staticData.qtyStep;
+            }
+        }
+
+        // 2. Enforce minimum quantity based on minimum notional requirement
         if (entryPrice > 0) {
              const minNotional = staticData.minNotional || 6;
              const step = staticData.qtyStep;
@@ -84,11 +97,12 @@ console.log(trade,'trade------')
         const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
             trade.pair || settings.pair,
             Number(trade.units),
-            trade.leverage || settings.leverage,
+            Number(trade.leverage) || 10, // Use leverage from trade config (LiveConfig), default to 10 if missing
             Number(trade.take_profit_price || trade.tp || 0),
             Number(trade.stop_loss_price || trade.sl || 0),
             trade.direction || 'buy',
-            trade.entryPrice || 0
+            trade.entryPrice || 0,
+            (trade as any).maxPositionSize || 85 // Capped for $4.6 wallet at 20x leverage
         );
 
         const baseOrder: any = {
@@ -103,7 +117,7 @@ console.log(trade,'trade------')
             margin_currency_short_name: marginName
         };
 
-        // if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
+        if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
         if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
 
         const body = {
@@ -112,24 +126,30 @@ console.log(trade,'trade------')
         };
 
         console.log(body, 'body======');
-
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
         try {
-            console.log(`[TradeService] 🚀 Executing ${trade.direction?.toUpperCase()} order for ${pair}...`);
+            await LoggerService.log('info', `🚀 Sending ${trade.direction?.toUpperCase()} order for ${pair}...`, 'TradeService', { pair, metadata: body });
+
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/create`, body, {
                 headers: {
                     'X-AUTH-APIKEY': apiKey,
                     'X-AUTH-SIGNATURE': signature,
                     'Content-Type': 'application/json'
-                }
+                },
+                timeout: 10000 // 10s timeout
             });
 
-            console.log("✅ CoinDCX Trade Executed Successfully:", JSON.stringify(response.data, null, 2));
+            await LoggerService.log('success', `✅ Trade Executed: ${trade.direction?.toUpperCase()} ${qty} ${pair} @ Market`, 'TradeService', { pair, metadata: response.data });
             return response.data;
         } catch (error: any) {
-            console.error("❌ CoinDCX Trade Execution Failed:", error.response?.data || error.message);
-            throw error;
+            const errorData = error.response?.data;
+            const status = error.response?.status;
+            
+            const errorMsg = errorData?.message || error.message;
+            await LoggerService.log('error', `❌ Trade Failed: ${errorMsg}`, 'TradeService', { pair, metadata: { errorData, status } });
+
+            throw new Error(errorMsg);
         }
     }
 

@@ -38,11 +38,14 @@ export function calculateTradeProfit(
     const exitVal = exitPrice * units;
     const fee = (entryVal + exitVal) * feeRate;
  
+    const pnlPercent = trade.entryPrice > 0 ? (grossProfit / (entryVal / (trade.leverage || 1))) * 100 : 0;
+
     return {
         profit: parseFloat((grossProfit - fee).toFixed(4)),
         fee: parseFloat(fee.toFixed(4)),
         grossProfit: parseFloat(grossProfit.toFixed(4)),
-        points: parseFloat((exitPrice - trade.entryPrice).toFixed(4))
+        points: parseFloat((exitPrice - trade.entryPrice).toFixed(4)),
+        pnlPercent: parseFloat(pnlPercent.toFixed(2))
     };
 }
  

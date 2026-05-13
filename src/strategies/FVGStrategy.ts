@@ -25,7 +25,7 @@ export class FVGStrategy implements Strategy {
     name = "Fair Value Gap Strategy";
     description = "Institutional imbalance detection with consequent encroachment entry logic.";
  
-    run(candles: Candle[], params: Record<string, any>): any {
+    run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): any {
         if (params.type === 'live') {
             return this.checkSignal(candles, params);
         }
@@ -33,7 +33,7 @@ export class FVGStrategy implements Strategy {
         const trades: Trade[] = [];
         let balance = params.capital || 250;
         const rr = params.riskRewardRatio || 3.9; // Updated to 1:3.9 RR
-        const riskAmount = params.riskAmount || 5; // Fixed $5 risk per trade
+        const riskAmount = params.riskAmount || 0.50; // Fixed $5 risk per trade
         const fvgExpiryCandles = 100; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 100; // Lookback for Premium/Discount zone
 
@@ -209,6 +209,15 @@ export class FVGStrategy implements Strategy {
                         
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
+                        
+                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
+                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
+                        const maxUnits = maxNotional / midpoint;
+                        
+                        if (units > maxUnits) {
+                            units = maxUnits;
+                        }
+                        
                         units = Number(units.toFixed(unitsPrecision));
                         
                         // Ensure units >= qtyStep
@@ -224,10 +233,30 @@ export class FVGStrategy implements Strategy {
                             units: units,
                             sl: sl,
                             tp: tp,
+                            resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,
                             indicators: { fvgTop: fvg.top, fvgBottom: fvg.bottom }
                         };
+
+                        // --- INTRA-CANDLE EXIT CHECK ---
+                        // If we just entered, check if the rest of THIS candle (or sub-candles) hits SL/TP
+                        const exitInfo = this.checkIntraCandleExit(activeTrade, curr, subCandles);
+                        if (exitInfo) {
+                            activeTrade.status = "closed";
+                            activeTrade.exitPrice = exitInfo.price;
+                            activeTrade.exitTime = exitInfo.time;
+                            activeTrade.exitReason = exitInfo.reason;
+                            
+                            const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
+                            activeTrade.profit = profit;
+                            activeTrade.pnlPercent = (profit / balance) * 100;
+                            balance += profit;
+                            trades.push({ ...activeTrade });
+                            activeTrade = null;
+                            lastExitIndex = i;
+                        }
+
                         fvg.filled = true;
                         fvg.filledAt = curr.time;
                         activeFVGs.splice(j, 1);
@@ -266,6 +295,15 @@ export class FVGStrategy implements Strategy {
  
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
+
+                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
+                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
+                        const maxUnits = maxNotional / midpoint;
+
+                        if (units > maxUnits) {
+                            units = maxUnits;
+                        }
+
                         units = Number(units.toFixed(unitsPrecision));
 
                         // Ensure units >= qtyStep
@@ -281,10 +319,29 @@ export class FVGStrategy implements Strategy {
                             units: units,
                             sl: sl,
                             tp: tp,
+                            resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,
                             indicators: { fvgTop: fvg.top, fvgBottom: fvg.bottom }
                         };
+
+                        // --- INTRA-CANDLE EXIT CHECK ---
+                        const exitInfo = this.checkIntraCandleExit(activeTrade, curr, subCandles);
+                        if (exitInfo) {
+                            activeTrade.status = "closed";
+                            activeTrade.exitPrice = exitInfo.price;
+                            activeTrade.exitTime = exitInfo.time;
+                            activeTrade.exitReason = exitInfo.reason;
+                            
+                            const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
+                            activeTrade.profit = profit;
+                            activeTrade.pnlPercent = (profit / balance) * 100;
+                            balance += profit;
+                            trades.push({ ...activeTrade });
+                            activeTrade = null;
+                            lastExitIndex = i;
+                        }
+
                         fvg.filled = true;
                         fvg.filledAt = curr.time;
                         activeFVGs.splice(j, 1);
@@ -308,6 +365,59 @@ export class FVGStrategy implements Strategy {
                 }))
             }
         };
+    }
+
+    private checkIntraCandleExit(trade: Trade, mainCandle: Candle, subCandles: Candle[]) {
+        const isBuy = trade.direction === "buy";
+        const sl = trade.sl || 0;
+        const tp = trade.tp || 0;
+
+        // 1. Check Sub-Candles if available (High Precision)
+        if (subCandles && subCandles.length > 0) {
+            const entryUnix = dayjs(trade.entryTime).valueOf();
+            const res = (trade as any).resolution || "1";
+            const intervalMs = Number(res) * 60 * 1000;
+            const candleEndUnix = mainCandle.time + intervalMs;
+            
+            const relevantSubs = subCandles.filter(s => s.time >= entryUnix && s.time < candleEndUnix);
+            for (const sub of relevantSubs) {
+                if (isBuy) {
+                    if (sub.low <= sl) return { price: sl, time: dayjs(sub.time).tz('Asia/Kolkata').format(), reason: "Stop Loss (Sub)" };
+                    if (sub.high >= tp) return { price: tp, time: dayjs(sub.time).tz('Asia/Kolkata').format(), reason: "Take Profit (Sub)" };
+                } else {
+                    if (sub.high >= sl) return { price: sl, time: dayjs(sub.time).tz('Asia/Kolkata').format(), reason: "Stop Loss (Sub)" };
+                    if (sub.low <= tp) return { price: tp, time: dayjs(sub.time).tz('Asia/Kolkata').format(), reason: "Take Profit (Sub)" };
+                }
+            }
+        }
+
+        // 2. Fallback to Main Candle High/Low (Low Precision)
+        if (isBuy) {
+            if (mainCandle.low <= sl) return { price: sl, time: dayjs(mainCandle.time).tz('Asia/Kolkata').format(), reason: "Stop Loss" };
+            if (mainCandle.high >= tp) return { price: tp, time: dayjs(mainCandle.time).tz('Asia/Kolkata').format(), reason: "Take Profit" };
+        } else {
+            if (mainCandle.high >= sl) return { price: sl, time: dayjs(mainCandle.time).tz('Asia/Kolkata').format(), reason: "Stop Loss" };
+            if (mainCandle.low <= tp) return { price: tp, time: dayjs(mainCandle.time).tz('Asia/Kolkata').format(), reason: "Take Profit" };
+        }
+
+        return null;
+    }
+
+    private calculatePnL(trade: Trade, exitPrice: number, balance: number) {
+        const isBuy = trade.direction === "buy";
+        const units = trade.units || 0;
+        const feeRate = 0;
+
+        let grossProfit = 0;
+        if (isBuy) {
+            grossProfit = (exitPrice - trade.entryPrice) * units;
+        } else {
+            grossProfit = (trade.entryPrice - exitPrice) * units;
+        }
+
+        const entryFee = trade.entryPrice * units * feeRate;
+        const exitFee = exitPrice * units * feeRate;
+        return { profit: grossProfit - entryFee - exitFee, fee: entryFee + exitFee };
     }
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {

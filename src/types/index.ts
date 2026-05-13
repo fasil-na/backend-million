@@ -27,6 +27,8 @@ export interface Trade {
     pnlPercent?: number | undefined;
     indicators?: any | undefined;
     initialSL?: number | undefined;
+    resolution?:string;
+    leverage?:number
 }
 
 export interface Candle {

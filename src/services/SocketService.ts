@@ -20,6 +20,7 @@ import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 import { PriceStore } from './PriceStore.js';
 import { LiveConfigService } from './LiveConfigService.js';
 import { TpGoldOpeningBreakout } from '../strategies/TpGoldOpeningBreakout.js';
+import { LoggerService } from './LoggerService.js';
 
 interface LiveState {
     config: any;
@@ -38,6 +39,12 @@ export class SocketService {
     private static marketRegistry = new Map<string, { candles: Candle[], candleIndexMap: Map<number, number> }>();
     private static channelConfigs = new Map<string, Set<string>>(); // channel -> Set of configIds
 
+    static emitSystemLog(log: any) {
+        if (this.io) {
+            this.io.emit('system_log', log);
+        }
+    }
+
     static async init(server: HTTPServer) {
         this.io = new SocketIOServer(server, { 
             cors: { origin: '*', methods: ["GET", "POST"] },
@@ -45,6 +52,9 @@ export class SocketService {
             pingInterval: 25000,
             pingTimeout: 60000,
         });
+
+        // Register this socket service as the broadcaster for LoggerService
+        LoggerService.setBroadcaster((log) => this.emitSystemLog(log));
 
         this.io.on('connection', (socket) => {
             console.log('Frontend connected:', socket.id);
@@ -80,6 +90,13 @@ export class SocketService {
         });
 
         this.startMemorySync();
+    }
+
+    public static async initializeConfig(configId: string) {
+        const config = await LiveConfigService.getConfig(configId);
+        if (config) {
+            await this.addConfigState(config);
+        }
     }
 
     private static async addConfigState(config: any) {
@@ -210,7 +227,7 @@ export class SocketService {
                         registry.candles.forEach((c, i) => registry.candleIndexMap.set(c.time, i));
                     }
                 }
-
+ 
                 // 2. Identify and trigger all configurations using this channel
                 const targetConfigs = this.channelConfigs.get(channel);
                 if (targetConfigs && isNewCandleTrigger) {
@@ -311,6 +328,20 @@ export class SocketService {
                     state.activeTrade.status = 'closed';
                     state.activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
                     state.activeTrade.exitReason = 'Exchange Position Closed';
+                    
+                    // Try to get last known price for profit calculation
+                    const registry = this.marketRegistry.get(this.formatChannel(pair, '1'));
+                    const lastCandle = registry?.candles && registry.candles.length > 0 ? registry.candles[registry.candles.length - 1] : null;
+                    const lastPrice = lastCandle ? lastCandle.close : state.activeTrade.sl;
+                    
+                    if (lastPrice) {
+                        const { profit, fee, pnlPercent } = calculateTradeProfit(state.activeTrade, lastPrice, 0.0005);
+                        state.activeTrade.profit = profit;
+                        state.activeTrade.fee = fee;
+                        state.activeTrade.pnlPercent = pnlPercent;
+                        state.activeTrade.exitPrice = lastPrice;
+                    }
+
                     await TradeHistoryService.saveTrade(state.activeTrade);
                     this.io.emit('trade-history-update', state.activeTrade);
                     state.activeTrade = null;
@@ -348,7 +379,9 @@ export class SocketService {
                 pair,
                 type: 'live',
                 capital: config.initialCapital || 100,
+                riskAmount: TradeService.TEST_RISK_AMOUNT, // Use the minimal risk for testing
                 leverage: config.leverage || 10,
+                maxPositionSize: config.maxPositionSize || 85,
                 atrMultiplierSL: 1.0,
                 simulationStartUnix: Math.floor(Date.now() / 1000) - 86400
             });
@@ -357,28 +390,34 @@ export class SocketService {
             
             if (result.matched && result.trade) {
                     state.lastSignalTime = latestCandle?.time || 0;
-                    console.log(`[Strategy] 🎯 SIGNAL DETECTED*******************: ${result.trade.direction} for ${pair}`);
+                    await LoggerService.log('info', `🎯 Signal Detected: ${result.trade.direction.toUpperCase()} for ${pair}`, 'SocketService', { configId, pair, metadata: result.trade });
                     await this.handleOrderEntry(configId, state, result.trade);
                 }
             } catch (err: any) {
-                console.error('[Strategy] Routine failed:', err.message);
+            await LoggerService.log('error', `Routine failed: ${err.message}`, 'SocketService', { pair: 'SYSTEM' });
             }
     }
 
     private static async handleOrderEntry(configId: string, state: LiveState, trade: Trade) {
         const config = state.config;
-        const pair = config.pair;
-
+        const pair = config.pair;      
+        console.log(config,'config.autoTrade--------')
+        console.log(state.isPlacingOrder,'state.isPlacingOrder-------')
         if (config.autoTrade) {
             if (state.isPlacingOrder) return;
             state.isPlacingOrder = true;
             try {
-                console.log(`[Order] 🚀 Executing REAL entry for ${pair}...`);
-                await TradeService.executeFutureOrder({ ...trade, stop_loss_price: trade.sl });
+                await LoggerService.log('info', `🚀 Executing REAL entry for ${pair}...`, 'SocketService', { configId, pair });
+                await TradeService.executeFutureOrder({ 
+                    ...trade, 
+                    leverage: config.leverage,
+                    maxPositionSize: (config as any).maxPositionSize,
+                    stop_loss_price: trade.sl 
+                } as any);
                 
                 // Wait for exchange state to update
                 await new Promise(res => setTimeout(res, 1500));
-
+ 
                 const savedTrade = await TradeHistoryService.saveTrade({
                     ...trade,
                     pair,
@@ -386,11 +425,14 @@ export class SocketService {
                     strategyId: config.strategyId,
                     status: 'open',
                     type: 'real',
+                    leverage: config.leverage,
+                    maxPositionSize: (config as any).maxPositionSize,
                     entryTime: dayjs().tz('Asia/Kolkata').format()
-                });
+                } as any);
                 state.activeTrade = savedTrade as any;
+                await LoggerService.log('success', `✅ REAL Position Opened for ${pair}`, 'SocketService', { configId, pair, metadata: savedTrade });
             } catch (err: any) {
-                console.error('[Order] ❌ REAL Execution Failed:', err.message);
+                await LoggerService.log('error', `❌ REAL Execution Failed for ${pair}: ${err.message}`, 'SocketService', { configId, pair });
                 throw err;
             } finally {
                 state.isPlacingOrder = false;
@@ -402,14 +444,15 @@ export class SocketService {
                 pair,
                 configId,
                 strategyId: config.strategyId,
+                leverage: config.leverage,
                 status: 'open',
                 type: 'paper',
                 entryTime: dayjs().tz('Asia/Kolkata').format()
             });
             state.activeTrade = savedTrade as any;
-            console.log(`[Order] 🏁 Paper trade initialized for ${pair}.`);
+            await LoggerService.log('info', `🏁 Paper Trade Initialized for ${pair}`, 'SocketService', { configId, pair, metadata: savedTrade });
+            this.io.emit('trade-history-update', state.activeTrade);
         }
-        this.io.emit('trade-history-update', state.activeTrade);
     }
 
     private static async monitorRealTimeSL(tick: Candle, state: LiveState) {
@@ -418,6 +461,9 @@ export class SocketService {
             if (!activeTrade || activeTrade.status !== 'open') return;
 
             const currentPrice = tick.close;
+            const high = tick.high || currentPrice;
+            const low = tick.low || currentPrice;
+
             const sl = activeTrade.sl || activeTrade.stop_loss_price || 0;
             const tp = activeTrade.tp || activeTrade.take_profit_price || 0;
             const isBuy = activeTrade.direction === 'buy';
@@ -426,24 +472,51 @@ export class SocketService {
             let reason = '';
 
             if (isBuy) {
-                if (sl > 0 && currentPrice <= sl) { exitHit = true; reason = 'SL Hit'; }
-                else if (tp > 0 && currentPrice >= tp) { exitHit = true; reason = 'TP Hit'; }
+                // For LONG: SL is hit if LOW touches SL price. TP is hit if HIGH touches TP price.
+                if (sl > 0 && low <= sl) { exitHit = true; reason = 'SL Hit'; }
+                else if (tp > 0 && high >= tp) { exitHit = true; reason = 'TP Hit'; }
             } else {
-                if (sl > 0 && currentPrice >= sl) { exitHit = true; reason = 'SL Hit'; }
-                else if (tp > 0 && currentPrice <= tp) { exitHit = true; reason = 'TP Hit'; }
+                // For SHORT: SL is hit if HIGH touches SL price. TP is hit if LOW touches TP price.
+                if (sl > 0 && high >= sl) { exitHit = true; reason = 'SL Hit'; }
+                else if (tp > 0 && low <= tp) { exitHit = true; reason = 'TP Hit'; }
             }
 
             if (exitHit) {
                 if (activeTrade.type === 'real' && !state.isClosingPosition) {
-                    console.log(`[Monitor] 🎯 REAL ${reason} Triggered for ${activeTrade.pair} at ${currentPrice}. Closing position...`);
+                    await LoggerService.log('warning', `🎯 REAL ${reason} Triggered for ${activeTrade.pair} at ${currentPrice}. Closing position...`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
                     state.isClosingPosition = true;
                     try {
                         const pos = state.currentPosition;
                         if (pos) {
                             await TradeService.closePosition({ positionId: pos.id });
+                            
+                            // Update trade record with exit data
+                            activeTrade.status = 'closed';
+                            activeTrade.exitPrice = currentPrice;
+                            activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
+                            activeTrade.exitReason = `REAL ${reason}`;
+                            
+                            // Use position quantity from exchange if units are missing in trade record
+                            if (!activeTrade.units && pos.active_pos) {
+                                activeTrade.units = Math.abs(pos.active_pos);
+                            }
+
+                            const { profit, fee, pnlPercent } = calculateTradeProfit(activeTrade, currentPrice, 0.0005);
+                            activeTrade.profit = profit;
+                            activeTrade.fee = fee;
+                            activeTrade.pnlPercent = pnlPercent;
+                            
+                            console.log(`[SL-Monitor] Profit Calc: Entry=${activeTrade.entryPrice}, Exit=${currentPrice}, Units=${activeTrade.units}, Direction=${activeTrade.direction}, Profit=${profit}, PnL%=${pnlPercent}`);
+                            
+                            await TradeHistoryService.saveTrade(activeTrade);
+                            state.activeTrade = null;
+                            state.currentPosition = null;
+                            this.io.emit('trade-history-update', activeTrade);
+
+                            await LoggerService.log('success', `✅ REAL Position Closed (${reason}) for ${activeTrade.pair} | PnL: ${profit.toFixed(4)}`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
                         }
                     } catch (err: any) {
-                        console.error(`[Monitor] ❌ Real exit failed for ${activeTrade.pair}:`, err.message);
+                        await LoggerService.log('error', `❌ Real Exit Failed for ${activeTrade.pair}: ${err.message}`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
                     }
                 } else if (activeTrade.type !== 'real') {
                     activeTrade.status = 'closed';

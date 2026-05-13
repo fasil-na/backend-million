@@ -16,8 +16,12 @@ export class LiveConfigController {
         try {
             const config = req.body;
             const saved = await LiveConfigService.saveConfig(config);
+            
             // Trigger engine to reload this config
-            await SocketService.init(null as any); // This might be too aggressive, better just add the state
+            if (saved && (saved as any)._id) {
+                await SocketService.initializeConfig((saved as any)._id.toString());
+            }
+
             res.json(saved);
         } catch (err: any) {
             res.status(500).json({ error: err.message });

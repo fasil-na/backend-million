@@ -10,6 +10,7 @@ import { calculateATR } from '../strategies/StrategyUtils.js';
 import { PriceStore } from '../services/PriceStore.js';
 import { SocketService } from '../services/SocketService.js';
 import { LiveConfigService } from '../services/LiveConfigService.js';
+import { LoggerService } from '../services/LoggerService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -152,7 +153,25 @@ export class TradeController {
         }
     }
     
+    static async getLogs(req: Request, res: Response) {
+        try {
+            const logs = await LoggerService.getRecentLogs(200);
+            res.json(logs);
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+
+    static async clearLogs(req: Request, res: Response) {
+        try {
+            await LoggerService.clearLogs();
+            res.json({ success: true });
+        } catch (error: any) {
+            res.status(500).json({ error: error.message });
+        }
+    }
 }
+
 async function executeWithRetry(fn:any, retries = 3) {
     let lastError;
 
