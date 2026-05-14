@@ -511,18 +511,31 @@ export class TpGoldOpeningBreakout implements Strategy {
         let sl = Number(slPrice.toFixed(pricePrecision));
         tp = Number(tp.toFixed(pricePrecision));
  
-        const units = staticData.qtyStep || 0.01;
+        const rawUnits = staticData.qtyStep || 0.01;
  
+        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
+        const formatted = TradeService.formatTradeParams(
+            params.pair || 'B-XAU_USDT',
+            rawUnits,
+            params.leverage || 10,
+            tp,
+            sl,
+            direction,
+            entryPrice,
+            params.maxPositionSize || 100
+        );
+
         return {
             entryTime: dayjs(timeMs).tz('Asia/Kolkata').format(),
             direction,
             entryPrice,
-            sl,
-            initialSL: sl,
-            tp,
+            sl: formatted.slPrice,
+            initialSL: formatted.slPrice,
+            tp: formatted.tpPrice,
             status: 'open',
             profit: 0,
-            units
+            units: formatted.qty,
+            leverage: formatted.maxLeverage
         };
     }
  

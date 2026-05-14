@@ -208,31 +208,31 @@ export class FVGStrategy implements Strategy {
                         }
                         
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        let units = riskAmount / riskPerUnit;
+                        const rawUnits = riskAmount / riskPerUnit;
                         
-                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
-                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
-                        const maxUnits = maxNotional / midpoint;
-                        
-                        if (units > maxUnits) {
-                            units = maxUnits;
-                        }
-                        
-                        units = Number(units.toFixed(unitsPrecision));
-                        
-                        // Ensure units >= qtyStep
-                        if (units < staticData.qtyStep) units = staticData.qtyStep;
+                        const tp = midpoint + (riskPerUnit * rr);
+                        const sl = midpoint - riskPerUnit;
 
-                        const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
-                        const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
-                        
+                        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
+                        const formatted = TradeService.formatTradeParams(
+                            params.pair || 'B-BTC_USDT',
+                            rawUnits,
+                            params.leverage || 10,
+                            tp,
+                            sl,
+                            "buy",
+                            midpoint,
+                            params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100
+                        );
+
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "buy",
                             entryPrice: midpoint,
-                            units: units,
-                            sl: sl,
-                            tp: tp,
+                            units: formatted.qty,
+                            sl: formatted.slPrice,
+                            tp: formatted.tpPrice,
+                            leverage: formatted.maxLeverage,
                             resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,
@@ -294,31 +294,31 @@ export class FVGStrategy implements Strategy {
                         }
  
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        let units = riskAmount / riskPerUnit;
+                        const rawUnits = riskAmount / riskPerUnit;
 
-                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
-                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
-                        const maxUnits = maxNotional / midpoint;
+                        const tp = midpoint - (riskPerUnit * rr);
+                        const sl = midpoint + riskPerUnit;
 
-                        if (units > maxUnits) {
-                            units = maxUnits;
-                        }
+                        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
+                        const formatted = TradeService.formatTradeParams(
+                            params.pair || 'B-BTC_USDT',
+                            rawUnits,
+                            params.leverage || 10,
+                            tp,
+                            sl,
+                            "sell",
+                            midpoint,
+                            params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100
+                        );
 
-                        units = Number(units.toFixed(unitsPrecision));
-
-                        // Ensure units >= qtyStep
-                        if (units < staticData.qtyStep) units = staticData.qtyStep;
-
-                        const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
-                        const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
- 
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "sell",
                             entryPrice: midpoint,
-                            units: units,
-                            sl: sl,
-                            tp: tp,
+                            units: formatted.qty,
+                            sl: formatted.slPrice,
+                            tp: formatted.tpPrice,
+                            leverage: formatted.maxLeverage,
                             resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,

@@ -520,11 +520,12 @@ export class SocketService {
                     }
                 } else if (activeTrade.type !== 'real') {
                     activeTrade.status = 'closed';
-                    activeTrade.exitPrice = currentPrice;
+                    const targetPrice = reason === 'SL Hit' ? sl : tp;
+                    activeTrade.exitPrice = targetPrice;
                     activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
                     activeTrade.exitReason = `Ticket ${reason}`;
                     
-                    const { profit, fee } = calculateTradeProfit(activeTrade, currentPrice, 0.0005);
+                    const { profit, fee } = calculateTradeProfit(activeTrade, targetPrice, 0.0005);
                     activeTrade.profit = profit;
                     activeTrade.fee = fee;
                     

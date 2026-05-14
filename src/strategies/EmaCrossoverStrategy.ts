@@ -174,22 +174,35 @@ export class EmaCrossoverStrategy implements Strategy {
         sl = Number(sl.toFixed(pricePrecision));
         tp = Number(tp.toFixed(pricePrecision));
 
-        const units = calculateUnits(entry, sl, {
+        const rawUnits = calculateUnits(entry, sl, {
             capital: balance,
             maxPositionSize,
             feeRate,
             leverage
         });
 
+        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
+        const formatted = TradeService.formatTradeParams(
+            params.pair || 'B-BTC_USDT',
+            rawUnits,
+            leverage,
+            tp,
+            sl,
+            direction,
+            entry,
+            maxPositionSize
+        );
+
         return {
             entryTime: dayjs(c.time).tz('Asia/Kolkata').format(),
             direction,
             entryPrice: entry,
-            sl,
-            tp,
+            sl: formatted.slPrice,
+            tp: formatted.tpPrice,
             status: 'open',
             profit: 0,
-            units
+            units: formatted.qty,
+            leverage: formatted.maxLeverage
         };
     }
 
