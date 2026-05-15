@@ -163,11 +163,12 @@ export class StrategyController {
                 // strategyId: 'fvg-imbalance' 
             }).lean();
 
-            // Return real data for the UI
+            // Return real and simulated data for the UI
             res.json({
                 date: date,
                 pair: pair,
                 trades: realTrades,
+                simulatedTrades: (simulationResult as any).trades || [],
                 tradesCount: realTrades.length,
                 dailyPnl: realTrades.reduce((a: number, t: any) => a + (t.profit || 0), 0),
                 candles: candles.filter((c: Candle) => c.time >= start * 1000), 

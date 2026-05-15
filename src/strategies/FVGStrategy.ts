@@ -33,10 +33,11 @@ export class FVGStrategy implements Strategy {
         const trades: Trade[] = [];
         let balance = params.capital || 250;
         const rr = params.riskRewardRatio || 3.9; // Updated to 1:3.9 RR
-        const riskAmount = params.riskAmount || 0.50; // Fixed $5 risk per trade
+        const riskAmount = 0.05// Fixed $0.05 risk per trade as requested
         const fvgExpiryCandles = 100; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 100; // Lookback for Premium/Discount zone
-
+        const simulationStart = params.simulationStartUnix ? params.simulationStartUnix * 1000 : 0;
+ 
         const cleanPair = (params.pair || 'B-BTC_USDT').replace('B-', '').toLowerCase();
         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
@@ -179,11 +180,11 @@ export class FVGStrategy implements Strategy {
                 if (fvg.direction === "bullish") {
                     // --- INSTITUTIONAL FILTERS (DISABLED FOR TESTING) ---
                     // 1. Trend: Above EMA50
-                    // if (curr.close <= e50) continue;
+                    if (curr.close <= e50) continue;
                     // 2. Momentum: RSI between 45 and 75
-                    // if (currentRSI <= 45 || currentRSI >= 75) continue;
+                    if (currentRSI <= 45 || currentRSI >= 75) continue;
                     // 3. PD Zone: Only buy in DISCOUNT (< 50% of recent range)
-                    // if (curr.close >= equilibrium) continue;
+                    if (curr.close >= equilibrium) continue;
                     // -----------------------------
  
                     if (curr.low < fvg.bottom) {
@@ -195,10 +196,24 @@ export class FVGStrategy implements Strategy {
                     }
  
                     if (curr.low <= midpoint && curr.high >= midpoint) {
+                        // 🕒 Only enter trades AFTER simulationStart
+                        if (curr.time < simulationStart) {
+                            fvg.filled = true;
+                            fvg.filledAt = curr.time;
+                            activeFVGs.splice(j, 1);
+                            j--;
+                            continue;
+                        }
+
                         const gapSize = fvg.top - fvg.bottom;
                         const buffer = gapSize * 0.05;
                         const riskPerUnit = Math.abs(midpoint - (fvg.bottom - buffer));
                         
+                               if (riskPerUnit < 20 ||riskPerUnit > 50) {
+                            // Skip this trade if the SL is too tight (less than 50 points)
+                            continue;
+                        }
+
                         if (riskPerUnit < (midpoint * 0.00001)) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
@@ -208,31 +223,31 @@ export class FVGStrategy implements Strategy {
                         }
                         
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        const rawUnits = riskAmount / riskPerUnit;
+                        let units = riskAmount / riskPerUnit;
                         
-                        const tp = midpoint + (riskPerUnit * rr);
-                        const sl = midpoint - riskPerUnit;
+                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
+                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
+                        const maxUnits = maxNotional / midpoint;
+                        
+                        if (units > maxUnits) {
+                            units = maxUnits;
+                        }
+                        
+                        units = Number(units.toFixed(unitsPrecision));
+                        
+                        // User requested to remove minimal quantity buy option
+                        // if (units < staticData.qtyStep) units = staticData.qtyStep;
 
-                        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
-                        const formatted = TradeService.formatTradeParams(
-                            params.pair || 'B-BTC_USDT',
-                            rawUnits,
-                            params.leverage || 10,
-                            tp,
-                            sl,
-                            "buy",
-                            midpoint,
-                            params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100
-                        );
-
+                        const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
+                        const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
+                        
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "buy",
                             entryPrice: midpoint,
-                            units: formatted.qty,
-                            sl: formatted.slPrice,
-                            tp: formatted.tpPrice,
-                            leverage: formatted.maxLeverage,
+                            units: units,
+                            sl: sl,
+                            tp: tp,
                             resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,
@@ -281,10 +296,24 @@ export class FVGStrategy implements Strategy {
                     }
  
                     if (curr.high >= midpoint && curr.low <= midpoint) {
+                        // 🕒 Only enter trades AFTER simulationStart
+                        if (curr.time < simulationStart) {
+                            fvg.filled = true;
+                            fvg.filledAt = curr.time;
+                            activeFVGs.splice(j, 1);
+                            j--;
+                            continue;
+                        }
+
                         const gapSize = fvg.top - fvg.bottom;
                         const buffer = gapSize * 0.05;
                         const riskPerUnit = Math.abs((fvg.top + buffer) - midpoint);
                         
+                        if (riskPerUnit < 20 ||riskPerUnit > 50) {
+                            // Skip this trade if the SL is too tight (less than 50 points)
+                            continue;
+                        }
+
                         if (riskPerUnit < (midpoint * 0.00001)) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
@@ -294,31 +323,31 @@ export class FVGStrategy implements Strategy {
                         }
  
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        const rawUnits = riskAmount / riskPerUnit;
+                        let units = riskAmount / riskPerUnit;
 
-                        const tp = midpoint - (riskPerUnit * rr);
-                        const sl = midpoint + riskPerUnit;
+                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
+                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
+                        const maxUnits = maxNotional / midpoint;
 
-                        // 🎯 Enforce Exchange Rules (Min Qty, Step, Notional)
-                        const formatted = TradeService.formatTradeParams(
-                            params.pair || 'B-BTC_USDT',
-                            rawUnits,
-                            params.leverage || 10,
-                            tp,
-                            sl,
-                            "sell",
-                            midpoint,
-                            params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100
-                        );
+                        if (units > maxUnits) {
+                            units = maxUnits;
+                        }
 
+                        units = Number(units.toFixed(unitsPrecision));
+
+                        // User requested to remove minimal quantity buy option
+                        // if (units < staticData.qtyStep) units = staticData.qtyStep;
+
+                        const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
+                        const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
+ 
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "sell",
                             entryPrice: midpoint,
-                            units: formatted.qty,
-                            sl: formatted.slPrice,
-                            tp: formatted.tpPrice,
-                            leverage: formatted.maxLeverage,
+                            units: units,
+                            sl: sl,
+                            tp: tp,
                             resolution: params.resolution || "1",
                             status: "open",
                             profit: 0,
@@ -415,8 +444,10 @@ export class FVGStrategy implements Strategy {
             grossProfit = (trade.entryPrice - exitPrice) * units;
         }
 
-        const entryFee = trade.entryPrice * units * feeRate;
-        const exitFee = exitPrice * units * feeRate;
+        // const entryFee = trade.entryPrice * units * feeRate;
+        // const exitFee = exitPrice * units * feeRate;
+        const entryFee = 0.05;
+        const exitFee = 0.05;
         return { profit: grossProfit - entryFee - exitFee, fee: entryFee + exitFee };
     }
 
