@@ -410,6 +410,7 @@ export class SocketService {
                 await LoggerService.log('info', `🚀 Executing REAL entry for ${pair}...`, 'SocketService', { configId, pair });
                 await TradeService.executeFutureOrder({ 
                     ...trade, 
+                    pair: pair,
                     leverage: config.leverage,
                     maxPositionSize: (config as any).maxPositionSize,
                     stop_loss_price: trade.sl 

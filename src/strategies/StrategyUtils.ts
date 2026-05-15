@@ -67,6 +67,7 @@ export function calculateATR(candles: Candle[], period = 14): number {
 }
  
 export function formatPair(pair: string): string {
+    if (!pair) return '';
     if (pair.startsWith('B-')) return pair;
     
     let formatted = pair;
