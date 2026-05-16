@@ -15,21 +15,21 @@ export class EmaCrossoverStrategy implements Strategy {
     description = 'Trades based on the crossover of two Exponential Moving Averages (EMA).';
 
     run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): { trades: Trade[], finalBalance: number, activeTrade?: Trade | null } | { matched: boolean, trade?: Trade } {
-        const { type = 'backtest', capital = 1000 } = params;
+        const { type = 'backtest', riskAmount = 5 } = params;
 
         if (type === 'live') {
             return this.checkSignal(candles, params);
         }
 
-        if (candles.length < 20) return { trades: [], finalBalance: capital };
+        if (candles.length < 20) return { trades: [], finalBalance: 10000 };
 
         const {
-            feeRate = 0.0005,
+            feeRate = 0,
             simulationStartUnix = 0,
             rrRatio = 2.0
         } = params;
 
-        let currentBalance = capital;
+        let currentBalance = 10000;
         const closes = candles.map(c => c.close);
         let allTrades: Trade[] = [];
         let currentTrade: Trade | null = null;
@@ -175,7 +175,7 @@ export class EmaCrossoverStrategy implements Strategy {
         tp = Number(tp.toFixed(pricePrecision));
 
         const rawUnits = calculateUnits(entry, sl, {
-            capital: balance,
+            riskAmount: params.riskAmount || 5,
             maxPositionSize,
             feeRate,
             leverage
@@ -190,7 +190,8 @@ export class EmaCrossoverStrategy implements Strategy {
             sl,
             direction,
             entry,
-            maxPositionSize
+            maxPositionSize,
+            params.riskAmount || 5
         );
 
         return {
@@ -218,7 +219,7 @@ export class EmaCrossoverStrategy implements Strategy {
 
         const direction = this.getSignal(candles, i);
         if (direction) {
-            const trade = this.calculateEntryParams(c, direction, candles, i, params.capital || 1000, params);
+            const trade = this.calculateEntryParams(c, direction, candles, i, 10000, params);
             return { matched: true, trade };
         }
 

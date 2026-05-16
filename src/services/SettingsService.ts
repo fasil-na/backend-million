@@ -6,7 +6,7 @@ export interface AppSettings {
     leverage: number;
     timeInterval: string;
     pair: string;
-    initialCapital: number;
+    riskAmount: number;
     selectedStrategyId: string;
     bankBalance?: number;
     activeTradeStatus:string;
@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     leverage: 1,
     timeInterval: '1',
     pair: 'B-BTC_USDT',
-    initialCapital: 1000,
+    riskAmount: 5,
     selectedStrategyId: 'opening-breakout',
     activeTradeStatus:"closed",
     riskMode:"minimal",

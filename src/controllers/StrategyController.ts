@@ -4,6 +4,8 @@ import { strategies } from '../strategies/index.js';
 import { CoinDCXApiService } from '../services/CoinDCXApiService.js';
 import type { Candle, Trade } from '../types/index.js';
 import { TradeModel } from '../models/Trade.js';
+import { SettingsService } from '../services/SettingsService.js';
+import { LiveConfigModel } from '../models/LiveConfig.js';
 
 export class StrategyController {
     static getList(req: Request, res: Response) {
@@ -18,14 +20,23 @@ export class StrategyController {
     static async runBacktest(req: Request, res: Response) {
         try {
             console.log('calling bactest route---')
+            const pair = (req.body.pair as string) || "B-BTC_USDT";
+            const resolution = (req.body.resolution as string) || "5";
             const {
-                isLive, from, to, month, year, startYear, startMonth, endYear, endMonth,
-                pair = "B-BTC_USDT", resolution = "5"
+                isLive, from, to, month, year, startYear, startMonth, endYear, endMonth
             } = req.body;
 
-            let leverage = req.body.leverage || await CoinDCXApiService.getInstrumentLeverage(pair);
-            let currentCapital = req.body.capital || req.body.capitalPerTrade || 1000;
-            const initialCapital = currentCapital;
+            const settings = SettingsService.getSettings();
+            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: req.body.strategyId || 'fvg-imbalance', isEnabled: true });
+            
+            let riskAmount = req.body.riskAmount !== undefined ? req.body.riskAmount : settings.riskAmount;
+            // If the requested risk matches the global setting, prioritize the live config's specific risk
+            if (liveConfig && (riskAmount === settings.riskAmount || req.body.riskAmount === undefined)) {
+                riskAmount = liveConfig.riskAmount;
+            }
+
+            let leverage = req.body.leverage || liveConfig?.leverage || await CoinDCXApiService.getInstrumentLeverage(pair);
+            let currentBalance = 10000; // Default for internal tracking
             let allTrades: Trade[] = [];
             let periods: { year: number, month: number }[] = [];
 
@@ -73,7 +84,7 @@ export class StrategyController {
                                 ...req.body, 
                                 leverage, 
                                 atrMultiplierSL: 1.0, 
-                                capital: currentCapital, 
+                                riskAmount: riskAmount, 
                                 simulationStartUnix: simStart, 
                                 type: 'backtest'
                             }, subCandles);
@@ -87,8 +98,8 @@ export class StrategyController {
                                 //     allTrades.push(result.activeTrade);
                                 // }
                                 
-                                currentCapital = result.finalBalance;
-                                if (currentCapital <= 0) break;
+                                currentBalance = result.finalBalance;
+                                if (currentBalance <= 0) break;
                             }
                         }
                     }
@@ -106,8 +117,8 @@ export class StrategyController {
                     successCount: allTrades.filter(t => t.profit > 0).length,
                     failedCount: allTrades.filter(t => t.profit <= 0).length,
                     winRate: allTrades.length > 0 ? (allTrades.filter(t => t.profit > 0).length / allTrades.length) * 100 : 0,
-                    initialCapital,
-                    finalBalance: currentCapital
+                    riskAmount,
+                    finalBalance: currentBalance
                 }
             });
         } catch (err: any) {
@@ -116,7 +127,9 @@ export class StrategyController {
     }
     static async getFVGAnalysis(req: Request, res: Response) {
         try {
-            const { date, pair = "B-BTC_USDT", resolution = "1" } = req.query;
+            const date = req.query.date as string;
+            const pair = (req.query.pair as string) || "B-BTC_USDT";
+            const resolution = (req.query.resolution as string) || "1";
             if (!date) return res.status(400).json({ error: 'Date is required' });
 
             const targetDate = dayjs(date as string).tz('Asia/Kolkata');
@@ -143,11 +156,15 @@ export class StrategyController {
             const strategy = strategies['fvg-imbalance'] as any;
             if (!strategy) return res.status(404).json({ error: 'FVG strategy not found' });
 
+            const settings = SettingsService.getSettings();
+            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: 'fvg-imbalance', isEnabled: true });
+            const riskAmount = liveConfig?.riskAmount ?? settings.riskAmount;
+
             // 1. Run strategy simulation ONLY for indicators (FVG boxes)
             const simulationResult = strategy.run(candles, {
                 pair,
-                leverage: 1,
-                capital: 1000,
+                leverage: liveConfig?.leverage || 1,
+                riskAmount: riskAmount,
                 simulationStartUnix: start,
                 type: 'backtest'
             }, subCandles);
@@ -165,8 +182,9 @@ export class StrategyController {
 
             // Return real and simulated data for the UI
             res.json({
-                date: date,
-                pair: pair,
+                date: targetDate.format('YYYY-MM-DD'),
+                pair,
+                riskAmount,
                 trades: realTrades,
                 simulatedTrades: (simulationResult as any).trades || [],
                 tradesCount: realTrades.length,

@@ -39,12 +39,12 @@ export class TpGoldOpeningBreakout implements Strategy {
         console.log("🚀 ~ GoldOpeningBreakout ~ run ~ candles:", candles.length)
  
         const {
-            capital = 1000,
-            feeRate = 0.0005,
+            riskAmount = 5,
+            feeRate = 0,
             breakoutBuffer = 2
         } = params;
  
-        let balance = capital;
+        let balance = 10000;
         let trades: Trade[] = [];
  
         let currentTrade: Trade | null = null;
@@ -522,7 +522,8 @@ export class TpGoldOpeningBreakout implements Strategy {
             sl,
             direction,
             entryPrice,
-            params.maxPositionSize || 100
+            params.maxPositionSize || 100,
+            params.riskAmount || 5
         );
 
         return {

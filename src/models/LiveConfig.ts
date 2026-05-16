@@ -5,7 +5,7 @@ const liveConfigSchema = new mongoose.Schema({
     strategyId: { type: String, required: true },
     timeInterval: { type: String, default: '1' },
     leverage: { type: Number, default: 10 },
-    initialCapital: { type: Number, default: 100 },
+    riskAmount: { type: Number, default: 5 },
     riskMode: { type: String, default: 'minimal' },
     autoTrade: { type: Boolean, default: false },
     isEnabled: { type: Boolean, default: true },

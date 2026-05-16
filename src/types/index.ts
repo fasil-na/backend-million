@@ -41,7 +41,7 @@ export interface Candle {
 }
 
 export interface BacktestParams {
-    initialCapital: number;
+    riskAmount: number;
     resolution: string;
 }
 
@@ -53,7 +53,7 @@ export interface BacktestResult {
         successCount: number;
         failedCount: number;
         winRate: number;
-        initialCapital: number;
+        riskAmount: number;
     };
 }
 

@@ -6,7 +6,7 @@ const settingsSchema = new mongoose.Schema({
     leverage: { type: Number, default: 1 },
     timeInterval: { type: String, default: '1' },
     pair: { type: String, default: 'B-BTC_USDT' },
-    initialCapital: { type: Number, default: 1000 },
+    riskAmount: { type: Number, default: 5 },
     selectedStrategyId: { type: String, default: 'opening-breakout' },
     bankBalance: { type: Number, default: 0 },
     riskMode: { type: String, enum: ['minimal', 'capital'], default: 'minimal' },

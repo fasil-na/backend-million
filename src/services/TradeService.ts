@@ -35,7 +35,6 @@ export class TradeService {
         return null;
     }
 
-    public static readonly TEST_RISK_AMOUNT = 0.5 // Reduced to $0.10 for minimal risk testing with $4.6 wallet
 
     public static readonly STATIC_INSTRUMENTS: Record<string, any> = {
         'B-BTC_USDT': { maxLeverage: 20, qtyStep: 0.001, priceStep: 0.1, minNotional: 6 },
@@ -44,14 +43,27 @@ export class TradeService {
         'SUSHIUSDT': { maxLeverage: 10, qtyStep: 1, priceStep: 0.0001, minNotional: 6 },
     };
 
-    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0, maxNotional: number = 100) {
+    static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0, maxNotional: number = 1000000, riskAmount: number = 0) {
         const pair = formatPair(rawPair);
         const staticData = this.STATIC_INSTRUMENTS[pair] || this.STATIC_INSTRUMENTS['B-BTC_USDT'];
         
         const maxLeverage = Math.min(leverage, staticData.maxLeverage);
+        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
+        const tpPrice = customTp > 0 ? Number(Number(customTp).toFixed(pricePrecision)) : 0;
+        const slPrice = customSl > 0 ? Number(Number(customSl).toFixed(pricePrecision)) : 0;
+
+        let qty = rawQty;
+
+        // 0. If riskAmount is provided, calculate qty based on risk
+        if (riskAmount > 0 && entryPrice > 0 && slPrice > 0) {
+            const riskPerUnit = Math.abs(entryPrice - slPrice);
+            if (riskPerUnit > 0) {
+                qty = riskAmount / riskPerUnit;
+            }
+        }
         
         const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-        let qty = Number(Number(rawQty).toFixed(qtyPrecision));
+        qty = Number(Number(qty).toFixed(qtyPrecision));
 
         // 1. Cap by maxNotional to prevent 'Insufficient funds'
         if (entryPrice > 0) {
@@ -73,17 +85,13 @@ export class TradeService {
              }
         }
 
-        const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
-        const tpPrice = customTp > 0 ? Number(Number(customTp).toFixed(pricePrecision)) : 0;
-        const slPrice = customSl > 0 ? Number(Number(customSl).toFixed(pricePrecision)) : 0;
-
         const marginName = pair.includes('USDT') ? 'USDT' : 'INR';
 
         return { pair, qty: Number(qty.toFixed(qtyPrecision)), maxLeverage, tpPrice, slPrice, marginName };
     }
 
     // final excecution of trade
-    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined }) {
+    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined, riskAmount?: number }) {
         const { apiKey, apiSecret } = this.credentials;
 console.log(trade,'trade------')
         if (!apiKey || !apiSecret) {
@@ -102,7 +110,8 @@ console.log(trade,'trade------')
             Number(trade.stop_loss_price || trade.sl || 0),
             trade.direction || 'buy',
             trade.entryPrice || 0,
-            (trade as any).maxPositionSize || 85 // Capped for $4.6 wallet at 20x leverage
+            (trade as any).maxPositionSize || 85,
+            trade.riskAmount || settings.riskAmount || 5
         );
 
         const baseOrder: any = {

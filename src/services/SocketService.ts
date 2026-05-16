@@ -265,7 +265,7 @@ export class SocketService {
                         const pbResult = TpGoldOpeningBreakout.checkPendingBreakout(data, {
                             ...state.config,
                             type: 'live',
-                            capital: state.config.initialCapital || 100
+                            riskAmount: state.config.riskAmount || 5
                         });
 
                         if (pbResult.matched && pbResult.trade) {
@@ -378,8 +378,7 @@ export class SocketService {
             const result = strategy.run(candles, {
                 pair,
                 type: 'live',
-                capital: config.initialCapital || 100,
-                riskAmount: TradeService.TEST_RISK_AMOUNT, // Use the minimal risk for testing
+                riskAmount: config.riskAmount || 5,
                 leverage: config.leverage || 10,
                 maxPositionSize: config.maxPositionSize || 85,
                 atrMultiplierSL: 1.0,
@@ -630,7 +629,7 @@ export class SocketService {
                 const result = strategy.run(candles, {
                     type: 'backtest',
                     pair: pair,
-                    capital: config.initialCapital,
+                    riskAmount: config.riskAmount,
                     leverage: config.leverage,
                     trailingSL: true,
                     atrMultiplierSL: 1.0, 

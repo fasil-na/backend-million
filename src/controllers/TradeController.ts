@@ -85,19 +85,12 @@ export class TradeController {
             if (overrideQuantity) {
                 quantityNum = overrideQuantity;
             } else {
-                if (config.riskMode === 'minimal') {
-                    // For minimal risk, we just set a tiny quantity.
-                    // TradeService.formatTradeParams will automatically bump it up to the exchange's minimum notional (e.g. $6.5)
-                    quantityNum = step; 
-                } else {
-                    const capital = config.initialCapital || 100;
-                    quantityNum = Math.floor(((capital * leverage) / entryPrice) / step) * step;
-                }
+                quantityNum = step; 
             }
-
+ 
             const sl = manualSL || (side === 'buy' ? entryPrice * 0.95 : entryPrice * 1.05);
-
-            const formattedParams = TradeService.formatTradeParams(pair, quantityNum, leverage, 0, sl, side, entryPrice);
+ 
+            const formattedParams = TradeService.formatTradeParams(pair, quantityNum, leverage, 0, sl, side, entryPrice, config.maxPositionSize || 100, config.riskAmount || 5);
          
             try {
                 const result = await executeWithRetry(() =>

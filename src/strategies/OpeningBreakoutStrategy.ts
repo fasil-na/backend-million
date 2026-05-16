@@ -14,17 +14,17 @@ export class OpeningBreakoutStrategy implements Strategy {
     name = 'Opening Breakout';
     description = 'Trades based on the high/low of an opening time window with EMA and ATR filters.';
     run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): { trades: Trade[], finalBalance: number, activeTrade?: Trade | null } | { matched: boolean } {
-        const { type = 'backtest', capital = 1000 } = params;
+        const { type = 'backtest', riskAmount = 5 } = params;
 console.log(type,'type-----')
         if (type === 'live') {
             const result = this.checkSignal(candles, params);
             return result;
         }
 
-        if (candles.length < 10) return { trades: [], finalBalance: capital };
+        if (candles.length < 10) return { trades: [], finalBalance: 10000 };
 
         const {
-            feeRate = 0.0005,
+            feeRate = 0,
             simulationStartUnix = 0,
             atrMultiplierSL = 1.0,
             rrRatio = 2.0
@@ -32,7 +32,7 @@ console.log(type,'type-----')
 
 
 
-        let currentBalance = capital;
+        let currentBalance = 10000;
         const closes = candles.map(c => c.close);
         let allTrades: Trade[] = [];
         let currentTrade: Trade | null = null;
@@ -216,7 +216,7 @@ console.log(type,'type-----')
         tp = Number(tp.toFixed(pricePrecision));
 
         const rawUnits = calculateUnits(entry, sl, {
-            capital: balance,
+            riskAmount: params.riskAmount || 5,
             maxPositionSize,
             feeRate,
             leverage
@@ -231,7 +231,8 @@ console.log(type,'type-----')
             sl,
             direction,
             entry,
-            maxPositionSize
+            maxPositionSize,
+            params.riskAmount || 5
         );
 
         return {
@@ -279,7 +280,7 @@ console.log(type,'type-----')
 
         const direction = this.getSignal(candles, i, rangeHigh, rangeLow);
         if (direction) {
-            const trade = this.calculateEntryParams(c, direction, candles, i, params.capital || 1000, params);
+            const trade = this.calculateEntryParams(c, direction, candles, i, 10000, params);
             return { matched: true, trade };
         }
 

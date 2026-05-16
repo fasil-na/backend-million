@@ -31,9 +31,9 @@ export class FVGStrategy implements Strategy {
         }
 
         const trades: Trade[] = [];
-        let balance = params.capital || 250;
-        const rr = params.riskRewardRatio || 3.9; // Updated to 1:3.9 RR
-        const riskAmount = 0.05// Fixed $0.05 risk per trade as requested
+        let balance = 10000; // Default starting balance for backtest tracking
+        const rr = params.riskRewardRatio || 3.9; 
+        const riskAmount = params.riskAmount; // Derived strictly from configuration
         const fvgExpiryCandles = 100; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 100; // Lookback for Premium/Discount zone
         const simulationStart = params.simulationStartUnix ? params.simulationStartUnix * 1000 : 0;
@@ -206,13 +206,13 @@ export class FVGStrategy implements Strategy {
                         }
 
                         const gapSize = fvg.top - fvg.bottom;
-                        const buffer = gapSize * 0.05;
+                        const buffer = 0;
                         const riskPerUnit = Math.abs(midpoint - (fvg.bottom - buffer));
                         
-                               if (riskPerUnit < 20 ||riskPerUnit > 50) {
-                            // Skip this trade if the SL is too tight (less than 50 points)
-                            continue;
-                        }
+                        //        if (riskPerUnit < 20 ||riskPerUnit > 50) {
+                        //     // Skip this trade if the SL is too tight (less than 50 points)
+                        //     continue;
+                        // }
 
                         if (riskPerUnit < (midpoint * 0.00001)) {
                             fvg.filled = true;
@@ -225,18 +225,15 @@ export class FVGStrategy implements Strategy {
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
                         
-                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
-                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
-                        const maxUnits = maxNotional / midpoint;
-                        
-                        if (units > maxUnits) {
-                            units = maxUnits;
-                        }
-                        
                         units = Number(units.toFixed(unitsPrecision));
-                        
-                        // User requested to remove minimal quantity buy option
-                        // if (units < staticData.qtyStep) units = staticData.qtyStep;
+                        // --- SAFETY CAP REMOVED: User requests pure risk-based sizing regardless of capital ---
+                        if (units <= 0) {
+                            fvg.filled = true;
+                            fvg.filledAt = curr.time;
+                            activeFVGs.splice(j, 1);
+                            j--;
+                            continue;
+                        }
 
                         const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
                         const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
@@ -309,10 +306,10 @@ export class FVGStrategy implements Strategy {
                         const buffer = gapSize * 0.05;
                         const riskPerUnit = Math.abs((fvg.top + buffer) - midpoint);
                         
-                        if (riskPerUnit < 20 ||riskPerUnit > 50) {
-                            // Skip this trade if the SL is too tight (less than 50 points)
-                            continue;
-                        }
+                        // if (riskPerUnit < 20 ||riskPerUnit > 50) {
+                        //     // Skip this trade if the SL is too tight (less than 50 points)
+                        //     continue;
+                        // }
 
                         if (riskPerUnit < (midpoint * 0.00001)) {
                             fvg.filled = true;
@@ -325,18 +322,15 @@ export class FVGStrategy implements Strategy {
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
 
-                        // --- SAFETY CAP: Ensure notional value doesn't exceed maxPositionSize ---
-                        const maxNotional = params.maxPositionSize || (params.capital * (params.leverage || 1)) || 100;
-                        const maxUnits = maxNotional / midpoint;
-
-                        if (units > maxUnits) {
-                            units = maxUnits;
-                        }
-
                         units = Number(units.toFixed(unitsPrecision));
-
-                        // User requested to remove minimal quantity buy option
-                        // if (units < staticData.qtyStep) units = staticData.qtyStep;
+                        // --- SAFETY CAP REMOVED ---
+                        if (units <= 0) {
+                            fvg.filled = true;
+                            fvg.filledAt = curr.time;
+                            activeFVGs.splice(j, 1);
+                            j--;
+                            continue;
+                        }
 
                         const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
                         const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
@@ -433,22 +427,13 @@ export class FVGStrategy implements Strategy {
     }
 
     private calculatePnL(trade: Trade, exitPrice: number, balance: number) {
-        const isBuy = trade.direction === "buy";
         const units = trade.units || 0;
-        const feeRate = 0;
+        const grossProfit = trade.direction === "buy"
+            ? (exitPrice - trade.entryPrice) * units
+            : (trade.entryPrice - exitPrice) * units;
 
-        let grossProfit = 0;
-        if (isBuy) {
-            grossProfit = (exitPrice - trade.entryPrice) * units;
-        } else {
-            grossProfit = (trade.entryPrice - exitPrice) * units;
-        }
-
-        // const entryFee = trade.entryPrice * units * feeRate;
-        // const exitFee = exitPrice * units * feeRate;
-        const entryFee = 0.05;
-        const exitFee = 0.05;
-        return { profit: grossProfit - entryFee - exitFee, fee: entryFee + exitFee };
+        const totalFee = 0.10; // Enforced flat $0.10 fee
+        return { profit: grossProfit - totalFee, fee: totalFee };
     }
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {

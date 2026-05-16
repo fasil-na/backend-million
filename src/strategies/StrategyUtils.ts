@@ -1,10 +1,10 @@
 import type { Candle, Trade } from '../types/index.js';
  
 export interface LotSizingParams {
-    capital: number;
-    maxPositionSize?: number; // Max percentage of capital to use for a single position (e.g. 100 for 100%)
+    riskAmount: number;
+    maxPositionSize?: number; // Max percentage of total account to use (notional)
     feeRate: number;
-    leverage?: number; // Add leverage for futures
+    leverage?: number;
 }
  
 export function calculateUnits(
@@ -12,14 +12,14 @@ export function calculateUnits(
     stopLoss: number,
     params: LotSizingParams
 ): number {
-    if (entryPrice <= 0) return 0;
+    if (entryPrice <= 0 || stopLoss <= 0) return 0;
  
-    // Direct Capital-based sizing (Compounding with Leverage)
-    // Units = (Capital * PositionSize% * Leverage) / EntryPrice
-    const effectiveCapital = params.capital * (params.leverage || 1);
-    const maxCapitalForTrade = effectiveCapital * ((params.maxPositionSize || 100) / 100);
-    const units = maxCapitalForTrade / entryPrice;
- 
+    const riskPerUnit = Math.abs(entryPrice - stopLoss);
+    if (riskPerUnit === 0) return 0;
+
+    // Units = Risk Amount / Risk Per Unit
+    let units = params.riskAmount / riskPerUnit;
+
     return units;
 }
  
@@ -34,11 +34,8 @@ export function calculateTradeProfit(
         ? (exitPrice - trade.entryPrice) * units
         : (trade.entryPrice - exitPrice) * units;
  
-    const entryVal = trade.entryPrice * units;
-    const exitVal = exitPrice * units;
-    const fee = (entryVal + exitVal) * feeRate;
- 
-    const pnlPercent = trade.entryPrice > 0 ? (grossProfit / (entryVal / (trade.leverage || 1))) * 100 : 0;
+    const pnlPercent = trade.entryPrice > 0 ? (grossProfit / (trade.entryPrice * units / (trade.leverage || 1))) * 100 : 0;
+    const fee = 0.10; // Enforced flat $0.10 fee for system parity
 
     return {
         profit: parseFloat((grossProfit - fee).toFixed(4)),
