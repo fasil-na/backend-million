@@ -19,8 +19,7 @@ const INITIAL_BALANCE = 10000;
 const DEFAULT_RISK_REWARD_RATIO =2.7;
 
 /** Maximum candles to wait for price to return to an FVG before expiring it */
-const FVG_EXPIRY_CANDLES = 100;
-
+const FVG_EXPIRY_CANDLES = 50;
 /** Lookback window (in candles) for Premium/Discount equilibrium calculation */
 const RANGE_LOOKBACK = 100;
 
@@ -28,7 +27,7 @@ const RANGE_LOOKBACK = 100;
 const MIN_GAP_SIZE_RATIO = 0.0002;
 
 /** Minimum body-to-range ratio for the middle candle (C2) to qualify */
-const MIN_C2_BODY_RATIO = 0.012;
+const MIN_C2_BODY_RATIO = 0.015;
 
 /** EMA period for short-term trend filter */
 const EMA_SHORT_PERIOD = 20;
@@ -46,7 +45,7 @@ const RSI_BULLISH_MIN = 45;
 const RSI_BULLISH_MAX = 75;
 
 /** Minimum risk-per-unit (in price terms) required to enter a trade */
-const MIN_RISK_PER_UNIT = 60;
+const MIN_RISK_PER_UNIT = 0.0002;
 
 /** Fee rate per side (0.06%) */
 const FEE_RATE = 0.0006;
@@ -64,7 +63,7 @@ const DEFAULT_RESOLUTION = "1";
 const TRADE_TIMEZONE = 'Asia/Kolkata';
 
 /** Default fallback pair key when instrument is not found */
-const DEFAULT_PAIR_KEY = 'B-BTC_USDT';
+const DEFAULT_PAIR_KEY = 'B-SUSHI_USDT';
 
 /** Number of recent candles to scan for live signal detection */
 const LIVE_SIGNAL_LOOKBACK = 100;
@@ -277,8 +276,11 @@ export class FVGStrategy implements Strategy {
                             continue;
                         }
 
+                        const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
+                        const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
+
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        let units = riskAmount / riskPerUnit;
+                        let units = riskAmount / (riskPerUnit + (midpoint + sl) * FEE_RATE);
                         units = Number(units.toFixed(unitsPrecision));
 
                         // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
@@ -292,9 +294,6 @@ export class FVGStrategy implements Strategy {
                             j--;
                             continue;
                         }
-
-                        const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
-                        const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
 
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz(TRADE_TIMEZONE).format(),
@@ -372,8 +371,11 @@ export class FVGStrategy implements Strategy {
                             continue;
                         }
 
+                        const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
+                        const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
+
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-                        let units = riskAmount / riskPerUnit;
+                        let units = riskAmount / (riskPerUnit + (midpoint + sl) * FEE_RATE);
                         units = Number(units.toFixed(unitsPrecision));
 
                         // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
@@ -387,9 +389,6 @@ export class FVGStrategy implements Strategy {
                             j--;
                             continue;
                         }
-
-                        const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
-                        const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
 
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz(TRADE_TIMEZONE).format(),

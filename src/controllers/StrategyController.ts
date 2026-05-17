@@ -20,7 +20,9 @@ export class StrategyController {
     static async runBacktest(req: Request, res: Response) {
         try {
             console.log('calling bactest route---')
-            const pair = (req.body.pair as string) || "B-BTC_USDT";
+            const strategyId = req.body.strategyId || 'fvg-imbalance';
+            const defaultPair = strategyId === 'fvg-imbalance' ? 'B-SUSHI_USDT' : 'B-BTC_USDT';
+            const pair = (req.body.pair as string) || defaultPair;
             const {
                 isLive, from, to, month, year, startYear, startMonth, endYear, endMonth
             } = req.body;
@@ -129,7 +131,7 @@ export class StrategyController {
     static async getFVGAnalysis(req: Request, res: Response) {
         try {
             const date = req.query.date as string;
-            const pair = (req.query.pair as string) || "B-BTC_USDT";
+            const pair = (req.query.pair as string) || "B-SUSHI_USDT";
             const resolution = (req.query.resolution as string) || "1";
             if (!date) return res.status(400).json({ error: 'Date is required' });
 
