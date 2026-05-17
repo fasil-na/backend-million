@@ -123,7 +123,7 @@ export class FVGStrategy implements Strategy {
                     }
 
                     const units = activeTrade.units || 0;
-                    const feeRate = 0; // Fees set to 0 for the "Fixed $5" concept
+                    const feeRate = 0.0006; // 0.06% fee per side
 
                     let grossProfit = 0;
                     if (isBuy) {
@@ -438,7 +438,12 @@ export class FVGStrategy implements Strategy {
             ? (exitPrice - trade.entryPrice) * units
             : (trade.entryPrice - exitPrice) * units;
 
-        const totalFee = 0.10; // Enforced flat $0.10 fee
+        // Calculate fee dynamically: 0.06% per side
+        const feeRate = 0.0006;
+        const entryFee = trade.entryPrice * units * feeRate;
+        const exitFee = exitPrice * units * feeRate;
+        const totalFee = entryFee + exitFee;
+        
         return { profit: grossProfit - totalFee, fee: totalFee };
     }
 
