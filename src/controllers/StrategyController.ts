@@ -29,7 +29,7 @@ export class StrategyController {
 
             const settings = SettingsService.getSettings();
             const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: req.body.strategyId || 'fvg-imbalance', isEnabled: true });
-            
+
             const resolution = (req.body.resolution as string) || liveConfig?.timeInterval || "5";
             let riskAmount = req.body.riskAmount !== undefined ? req.body.riskAmount : settings.riskAmount;
             // If the requested risk matches the global setting, prioritize the live config's specific risk
@@ -83,24 +83,24 @@ export class StrategyController {
                         const strategy = strategies[req.body.strategyId || 'opening-breakout'] as any;
                         if (strategy) {
                             const result = strategy.run(candles, {
-                                ...req.body, 
-                                leverage, 
-                                atrMultiplierSL: 1.0, 
-                                riskAmount: riskAmount, 
-                                simulationStartUnix: simStart, 
+                                ...req.body,
+                                leverage,
+                                atrMultiplierSL: 1.0,
+                                riskAmount: riskAmount,
+                                simulationStartUnix: simStart,
                                 type: 'backtest',
                                 resolution: resolution
                             }, subCandles);
-                            
+
                             if ('trades' in result) {
                                 allTrades.push(...result.trades);
-                                
+
                                 // Show currently open simulated trades in the UI so users 
                                 // don't think recent signals were missed if they haven't closed yet.
                                 // if (result.activeTrade) {
                                 //     allTrades.push(result.activeTrade);
                                 // }
-                                
+
                                 currentBalance = result.finalBalance;
                                 if (currentBalance <= 0) break;
                             }
@@ -132,13 +132,15 @@ export class StrategyController {
         try {
             const date = req.query.date as string;
             const pair = (req.query.pair as string) || "B-SUSHI_USDT";
-            const resolution = (req.query.resolution as string) || "1";
+            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: 'fvg-imbalance', isEnabled: true });
+
+            const resolution = liveConfig?.timeInterval || "5";
             if (!date) return res.status(400).json({ error: 'Date is required' });
 
             const targetDate = dayjs(date as string).tz('Asia/Kolkata');
             const start = Math.floor(targetDate.startOf('day').valueOf() / 1000);
             const end = Math.floor(targetDate.endOf('day').valueOf() / 1000);
-            
+
             // To detect FVG correctly, we need some candles before the start of the day
             const fetchStart = start - (24 * 60 * 60); // 1 day before for indicators
 
@@ -160,7 +162,6 @@ export class StrategyController {
             if (!strategy) return res.status(404).json({ error: 'FVG strategy not found' });
 
             const settings = SettingsService.getSettings();
-            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: 'fvg-imbalance', isEnabled: true });
             const riskAmount = liveConfig?.riskAmount ?? settings.riskAmount;
 
             // 1. Run strategy simulation ONLY for indicators (FVG boxes)
@@ -175,7 +176,7 @@ export class StrategyController {
             // 2. Fetch REAL executed trades from Database for this pair/day
             const startStr = targetDate.startOf('day').format();
             const endStr = targetDate.endOf('day').format();
-            
+
             const realTrades = await TradeModel.find({
                 pair: pair as string,
                 entryTime: { $gte: startStr, $lte: endStr },
@@ -192,7 +193,7 @@ export class StrategyController {
                 simulatedTrades: (simulationResult as any).trades || [],
                 tradesCount: realTrades.length,
                 dailyPnl: realTrades.reduce((a: number, t: any) => a + (t.profit || 0), 0),
-                candles: candles.filter((c: Candle) => c.time >= start * 1000), 
+                candles: candles.filter((c: Candle) => c.time >= start * 1000),
                 indicators: (simulationResult as any).indicators
             });
 
