@@ -46,7 +46,7 @@ export class TradeService {
     static formatTradeParams(rawPair: string, rawQty: number, leverage: number, customTp: number = 0, customSl: number = 0, tradeDirection: string = 'buy', entryPrice: number = 0, maxNotional: number = 1000000, riskAmount: number = 0) {
         const pair = formatPair(rawPair);
         const staticData = this.STATIC_INSTRUMENTS[pair] || this.STATIC_INSTRUMENTS['B-BTC_USDT'];
-        
+
         const maxLeverage = Math.min(leverage, staticData.maxLeverage);
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
         const tpPrice = customTp > 0 ? Number(Number(customTp).toFixed(pricePrecision)) : 0;
@@ -61,28 +61,28 @@ export class TradeService {
                 qty = riskAmount / riskPerUnit;
             }
         }
-        
+
         const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
         qty = Number(Number(qty).toFixed(qtyPrecision));
 
-        // 1. Cap by maxNotional to prevent 'Insufficient funds'
-        if (entryPrice > 0) {
-            const currentNotional = qty * entryPrice;
-            if (currentNotional > maxNotional) {
-                console.log(`⚠️ Capping notional from $${currentNotional.toFixed(2)} to $${maxNotional.toFixed(2)}`);
-                qty = maxNotional / entryPrice;
-                qty = Math.floor(qty / staticData.qtyStep) * staticData.qtyStep;
-            }
-        }
+        // // 1. Cap by maxNotional to prevent 'Insufficient funds'
+        // if (entryPrice > 0) {
+        //     const currentNotional = qty * entryPrice;
+        //     if (currentNotional > maxNotional) {
+        //         console.log(`⚠️ Capping notional from $${currentNotional.toFixed(2)} to $${maxNotional.toFixed(2)}`);
+        //         qty = maxNotional / entryPrice;
+        //         qty = Math.floor(qty / staticData.qtyStep) * staticData.qtyStep;
+        //     }
+        // }
 
         // 2. Enforce minimum quantity based on minimum notional requirement
         if (entryPrice > 0) {
-             const minNotional = staticData.minNotional || 6;
-             const step = staticData.qtyStep;
-             const minQty = Math.ceil((minNotional / entryPrice) / step) * step;
-             if (qty < minQty) {
-                 qty = minQty;
-             }
+            const minNotional = staticData.minNotional || 6;
+            const step = staticData.qtyStep;
+            const minQty = Math.ceil((minNotional / entryPrice) / step) * step;
+            if (qty < minQty) {
+                throw new Error(`Calculated quantity ${qty.toFixed(qtyPrecision)} is less than minimum required ${minQty.toFixed(qtyPrecision)} for ${pair}. Skipping trade to avoid excessive risk.`);
+            }
         }
 
         const marginName = pair.includes('USDT') ? 'USDT' : 'INR';
@@ -93,7 +93,6 @@ export class TradeService {
     // final excecution of trade
     static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined, riskAmount?: number }) {
         const { apiKey, apiSecret } = this.credentials;
-console.log(trade,'trade------')
         if (!apiKey || !apiSecret) {
             console.error("❌ CoinDCX API Key or Secret missing in .env. Skipping trade execution.");
             return;
@@ -102,42 +101,42 @@ console.log(trade,'trade------')
         const settings = SettingsService.getSettings();
         const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
-        const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
-            trade.pair || settings.pair,
-            Number(trade.units),
-            Number(trade.leverage) || 10, // Use leverage from trade config (LiveConfig), default to 10 if missing
-            Number(trade.take_profit_price || trade.tp || 0),
-            Number(trade.stop_loss_price || trade.sl || 0),
-            trade.direction || 'buy',
-            trade.entryPrice || 0,
-            (trade as any).maxPositionSize || 85,
-            trade.riskAmount || settings.riskAmount || 5
-        );
-
-        const baseOrder: any = {
-            side: trade.direction?.toLowerCase() || 'buy',
-            pair: pair,
-            order_type: "market_order",
-            price:null,
-            total_quantity: qty,
-            leverage: maxLeverage,
-            notification: "no_notification",
-            time_in_force:null,
-            margin_currency_short_name: marginName
-        };
-
-        if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
-        if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
-
-        const body = {
-            "timestamp": timeStamp,
-            "order": baseOrder
-        };
-
-        console.log(body, 'body======');
-        const payload = Buffer.from(JSON.stringify(body)).toString();
-        const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
         try {
+            const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
+                trade.pair || settings.pair,
+                Number(trade.units),
+                Number(trade.leverage) || 10, // Use leverage from trade config (LiveConfig), default to 10 if missing
+                Number(trade.take_profit_price || trade.tp || 0),
+                Number(trade.stop_loss_price || trade.sl || 0),
+                trade.direction || 'buy',
+                trade.entryPrice || 0,
+                (trade as any).maxPositionSize || 85,
+                trade.riskAmount || .05
+            );
+
+            const baseOrder: any = {
+                side: trade.direction?.toLowerCase() || 'buy',
+                pair: pair,
+                order_type: "market_order",
+                price: null,
+                total_quantity: qty,
+                leverage: maxLeverage,
+                notification: "no_notification",
+                time_in_force: null,
+                margin_currency_short_name: marginName
+            };
+
+            if (tpPrice > 0) baseOrder.take_profit_price = tpPrice;
+            if (slPrice > 0) baseOrder.stop_loss_price = slPrice;
+
+            const body = {
+                "timestamp": timeStamp,
+                "order": baseOrder
+            };
+
+            const payload = Buffer.from(JSON.stringify(body)).toString();
+            const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');
+
             await LoggerService.log('info', `🚀 Sending ${trade.direction?.toUpperCase()} order for ${pair}...`, 'TradeService', { pair, metadata: body });
 
             const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/create`, body, {
@@ -154,9 +153,8 @@ console.log(trade,'trade------')
         } catch (error: any) {
             const errorData = error.response?.data;
             const status = error.response?.status;
-            
+
             const errorMsg = errorData?.message || error.message;
-            await LoggerService.log('error', `❌ Trade Failed: ${errorMsg}`, 'TradeService', { pair, metadata: { errorData, status } });
 
             throw new Error(errorMsg);
         }
@@ -255,7 +253,7 @@ console.log(trade,'trade------')
                 },
                 // Some environments/versions of axios might require the body in 'data' for GET requests 
                 // if the signature was generated based on it.
-                data: bodyString 
+                data: bodyString
             });
             return response.data;
         } catch (error: any) {
@@ -279,17 +277,17 @@ console.log(trade,'trade------')
         }
         return null;
     }
- static async  closePosition({positionId}:{positionId:string}) {
+    static async closePosition({ positionId }: { positionId: string }) {
         const { apiKey, apiSecret } = this.credentials;
 
         if (!apiKey || !apiSecret) {
             console.error("❌ CoinDCX API Key or Secret missing in .env. Skipping trade execution.");
             return;
         }
-                const timeStamp = Math.floor(Date.now()); 
-            const body = {
+        const timeStamp = Math.floor(Date.now());
+        const body = {
             timestamp: timeStamp,
-            id:positionId
+            id: positionId
         };
         const payload = Buffer.from(JSON.stringify(body)).toString();
         const signature = crypto.createHmac('sha256', apiSecret).update(payload).digest('hex');

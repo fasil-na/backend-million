@@ -8,7 +8,7 @@ import { TradeService } from '../services/TradeService.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
- 
+
 export interface FVG {
     top: number;
     bottom: number;
@@ -19,12 +19,12 @@ export interface FVG {
     endTime: number;
     filledAt?: number;
 }
- 
+
 export class FVGStrategy implements Strategy {
     id = "fvg-imbalance";
     name = "Fair Value Gap Strategy";
     description = "Institutional imbalance detection with consequent encroachment entry logic.";
- 
+
     run(candles: Candle[], params: Record<string, any>, subCandles: Candle[] = []): any {
         if (params.type === 'live') {
             return this.checkSignal(candles, params);
@@ -32,42 +32,42 @@ export class FVGStrategy implements Strategy {
 
         const trades: Trade[] = [];
         let balance = 10000; // Default starting balance for backtest tracking
-        const rr = params.riskRewardRatio || 3.9; 
+        const rr = params.riskRewardRatio || 3.9;
         const riskAmount = params.riskAmount; // Derived strictly from configuration
         const fvgExpiryCandles = 100; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 100; // Lookback for Premium/Discount zone
         const simulationStart = params.simulationStartUnix ? params.simulationStartUnix * 1000 : 0;
- 
+
         const cleanPair = (params.pair || 'B-BTC_USDT').replace('B-', '').toLowerCase();
         const staticData = TradeService.STATIC_INSTRUMENTS[cleanPair] || TradeService.STATIC_INSTRUMENTS[params.pair] || TradeService.STATIC_INSTRUMENTS['B-BTC_USDT'];
         const pricePrecision = staticData.priceStep.toString().split('.')[1]?.length || 0;
- 
+
         // --- MOMENTUM & TREND PRE-CALCULATION ---
         const closes = candles.map(c => c.close);
         const ema50 = calculateEMA(closes, 50);
         const ema200 = calculateEMA(closes, 200);
         const rsiValues = calculateRSI(closes, 14);
         // ----------------------------------------
- 
+
         const allFVGs: FVG[] = []; // Archive for indicators
         let activeFVGs: FVG[] = []; // Hot list for loop efficiency
         let activeTrade: Trade | null = null;
         let lastExitIndex = -1;
- 
+
         for (let i = 2; i < candles.length; i++) {
             const c1 = candles[i - 2]!;
             const c2 = candles[i - 1]!;
             const c3 = candles[i]!;
- 
+
             // 1. Detect New FVG
             const c2Range = c2.high - c2.low;
             const c2Body = Math.abs(c2.open - c2.close);
             const c2BodyRatio = c2Range > 0 ? c2Body / c2Range : 0;
- 
+
             if (c3.low > c1.high) {
                 const gapSize = c3.low - c1.high;
                 // Rule: Strong Body (>= 20%) + Minimum Gap Size
-            //******0.02 */
+                //******0.02 */
                 if (gapSize > (c3.close * 0.0002) && c2BodyRatio >= 0.01) {
                     const fvg: FVG = {
                         top: c3.low,
@@ -99,19 +99,19 @@ export class FVGStrategy implements Strategy {
                     activeFVGs.push(fvg);
                 }
             }
- 
+
             // 2. Manage Active Trade
             if (activeTrade) {
                 const curr = candles[i]!;
                 const isBuy = activeTrade.direction === "buy";
- 
+
                 const hitSL = isBuy ? curr.low <= (activeTrade.sl || 0) : curr.high >= (activeTrade.sl || Infinity);
                 const hitTP = isBuy ? curr.high >= (activeTrade.tp || Infinity) : curr.low <= (activeTrade.tp || 0);
- 
+
                 if (hitSL || hitTP) {
                     activeTrade.status = "closed";
                     activeTrade.exitTime = dayjs(curr.time).tz('Asia/Kolkata').format();
-                    
+
                     if (hitSL) {
                         // Fixed $5 concept: exit exactly at SL price
                         activeTrade.exitPrice = activeTrade.sl || (isBuy ? curr.low : curr.high);
@@ -121,38 +121,38 @@ export class FVGStrategy implements Strategy {
                         activeTrade.exitPrice = activeTrade.tp || (isBuy ? curr.high : curr.low);
                         activeTrade.exitReason = "Take Profit";
                     }
-                    
+
                     const units = activeTrade.units || 0;
                     const feeRate = 0; // Fees set to 0 for the "Fixed $5" concept
-                    
+
                     let grossProfit = 0;
                     if (isBuy) {
                         grossProfit = (activeTrade.exitPrice! - activeTrade.entryPrice) * units;
                     } else {
                         grossProfit = (activeTrade.entryPrice - activeTrade.exitPrice!) * units;
                     }
- 
+
                     // Net PnL = Gross Profit - Entry Fee - Exit Fee
                     const entryFee = activeTrade.entryPrice * units * feeRate;
                     const exitFee = activeTrade.exitPrice! * units * feeRate;
                     activeTrade.profit = grossProfit - entryFee - exitFee;
- 
+
                     activeTrade.pnlPercent = (activeTrade.profit / balance) * 100;
                     balance += activeTrade.profit;
-                    
+
                     trades.push({ ...activeTrade });
                     activeTrade = null;
                     lastExitIndex = i;
                 }
             }
- 
+
             // 3. Look for Entry in unfilled active FVGs
             if (activeTrade || i === lastExitIndex) continue;
-            
+
             const curr = candles[i]!;
             const e50 = ema50[i] || 0;
             const currentRSI = rsiValues[i] || 50;
- 
+
             // --- PREMIUM / DISCOUNT ZONE CALCULATION ---
             const startRange = Math.max(0, i - rangeLookback);
             const window = candles.slice(startRange, i + 1);
@@ -160,13 +160,13 @@ export class FVGStrategy implements Strategy {
             const rangeLow = Math.min(...window.map(can => can.low));
             const equilibrium = (rangeHigh + rangeLow) / 2;
             // --------------------------------------------
- 
+
             for (let j = 0; j < activeFVGs.length; j++) {
                 const fvg = activeFVGs[j];
                 if (!fvg) continue;
-                
+
                 if (i <= fvg.formedAt) continue;
- 
+
                 if (i - fvg.formedAt > fvgExpiryCandles) {
                     fvg.filled = true;
                     fvg.filledAt = curr.time;
@@ -174,9 +174,9 @@ export class FVGStrategy implements Strategy {
                     j--;
                     continue;
                 }
- 
+
                 const midpoint = (fvg.top + fvg.bottom) / 2;
- 
+
                 if (fvg.direction === "bullish") {
                     // --- INSTITUTIONAL FILTERS (DISABLED FOR TESTING) ---
                     // 1. Trend: Above EMA50
@@ -186,7 +186,7 @@ export class FVGStrategy implements Strategy {
                     // 3. PD Zone: Only buy in DISCOUNT (< 50% of recent range)
                     if (curr.close >= equilibrium) continue;
                     // -----------------------------
- 
+
                     if (curr.low < fvg.bottom) {
                         fvg.filled = true;
                         fvg.filledAt = curr.time;
@@ -194,7 +194,7 @@ export class FVGStrategy implements Strategy {
                         j--;
                         continue;
                     }
- 
+
                     if (curr.low <= midpoint && curr.high >= midpoint) {
                         // 🕒 Only enter trades AFTER simulationStart
                         if (curr.time < simulationStart) {
@@ -208,7 +208,7 @@ export class FVGStrategy implements Strategy {
                         const gapSize = fvg.top - fvg.bottom;
                         const buffer = 0;
                         const riskPerUnit = Math.abs(midpoint - (fvg.bottom - buffer));
-                        
+
                         //        if (riskPerUnit < 20 ||riskPerUnit > 50) {
                         //     // Skip this trade if the SL is too tight (less than 50 points)
                         //     continue;
@@ -221,13 +221,16 @@ export class FVGStrategy implements Strategy {
                             j--;
                             continue;
                         }
-                        
+
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
-                        
                         units = Number(units.toFixed(unitsPrecision));
-                        // --- SAFETY CAP REMOVED: User requests pure risk-based sizing regardless of capital ---
-                        if (units <= 0) {
+
+                        // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
+                        const minNotional = staticData.minNotional || 6;
+                        const minQty = Math.ceil((minNotional / midpoint) / staticData.qtyStep) * staticData.qtyStep;
+
+                        if (units < minQty || units <= 0) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
                             activeFVGs.splice(j, 1);
@@ -237,7 +240,7 @@ export class FVGStrategy implements Strategy {
 
                         const tp = Number((midpoint + (riskPerUnit * rr)).toFixed(pricePrecision));
                         const sl = Number((midpoint - riskPerUnit).toFixed(pricePrecision));
-                        
+
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "buy",
@@ -259,7 +262,7 @@ export class FVGStrategy implements Strategy {
                             activeTrade.exitPrice = exitInfo.price;
                             activeTrade.exitTime = exitInfo.time;
                             activeTrade.exitReason = exitInfo.reason;
-                            
+
                             const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
                             activeTrade.profit = profit;
                             activeTrade.pnlPercent = (profit / balance) * 100;
@@ -283,7 +286,7 @@ export class FVGStrategy implements Strategy {
                     // 3. PD Zone: Only sell in PREMIUM (> 50% of recent range)
                     // if (curr.close <= equilibrium) continue;
                     // -----------------------------
- 
+
                     if (curr.high > fvg.top) {
                         fvg.filled = true;
                         fvg.filledAt = curr.time;
@@ -291,7 +294,7 @@ export class FVGStrategy implements Strategy {
                         j--;
                         continue;
                     }
- 
+
                     if (curr.high >= midpoint && curr.low <= midpoint) {
                         // 🕒 Only enter trades AFTER simulationStart
                         if (curr.time < simulationStart) {
@@ -305,7 +308,7 @@ export class FVGStrategy implements Strategy {
                         const gapSize = fvg.top - fvg.bottom;
                         const buffer = gapSize * 0.05;
                         const riskPerUnit = Math.abs((fvg.top + buffer) - midpoint);
-                        
+
                         // if (riskPerUnit < 20 ||riskPerUnit > 50) {
                         //     // Skip this trade if the SL is too tight (less than 50 points)
                         //     continue;
@@ -318,13 +321,16 @@ export class FVGStrategy implements Strategy {
                             j--;
                             continue;
                         }
- 
+
                         const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
                         let units = riskAmount / riskPerUnit;
-
                         units = Number(units.toFixed(unitsPrecision));
-                        // --- SAFETY CAP REMOVED ---
-                        if (units <= 0) {
+
+                        // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
+                        const minNotional = staticData.minNotional || 6;
+                        const minQty = Math.ceil((minNotional / midpoint) / staticData.qtyStep) * staticData.qtyStep;
+
+                        if (units < minQty || units <= 0) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
                             activeFVGs.splice(j, 1);
@@ -334,7 +340,7 @@ export class FVGStrategy implements Strategy {
 
                         const tp = Number((midpoint - (riskPerUnit * rr)).toFixed(pricePrecision));
                         const sl = Number((midpoint + riskPerUnit).toFixed(pricePrecision));
- 
+
                         activeTrade = {
                             entryTime: dayjs(curr.time).tz('Asia/Kolkata').format(),
                             direction: "sell",
@@ -355,7 +361,7 @@ export class FVGStrategy implements Strategy {
                             activeTrade.exitPrice = exitInfo.price;
                             activeTrade.exitTime = exitInfo.time;
                             activeTrade.exitReason = exitInfo.reason;
-                            
+
                             const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
                             activeTrade.profit = profit;
                             activeTrade.pnlPercent = (profit / balance) * 100;
@@ -373,7 +379,7 @@ export class FVGStrategy implements Strategy {
                 }
             }
         }
- 
+
         return {
             trades,
             finalBalance: balance,
@@ -401,7 +407,7 @@ export class FVGStrategy implements Strategy {
             const res = (trade as any).resolution || "1";
             const intervalMs = Number(res) * 60 * 1000;
             const candleEndUnix = mainCandle.time + intervalMs;
-            
+
             const relevantSubs = subCandles.filter(s => s.time >= entryUnix && s.time < candleEndUnix);
             for (const sub of relevantSubs) {
                 if (isBuy) {
@@ -438,14 +444,14 @@ export class FVGStrategy implements Strategy {
 
     private checkSignal(candles: Candle[], params: Record<string, any>): { matched: boolean, trade?: Trade } {
         if (candles.length < 5) return { matched: false };
-        
+
         // We only care about the last 100 candles to detect relevant FVGs
         const lookback = Math.min(candles.length, 100);
         const relevantCandles = candles.slice(-lookback);
-        
+
         // Re-run the FVG detection on the subset
         const result = this.run(relevantCandles, { ...params, type: 'backtest' });
-        
+
         return {
             matched: !!result.trade,
             trade: result.trade

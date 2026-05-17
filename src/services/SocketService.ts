@@ -412,7 +412,8 @@ export class SocketService {
                     pair: pair,
                     leverage: config.leverage,
                     maxPositionSize: (config as any).maxPositionSize,
-                    stop_loss_price: trade.sl 
+                    stop_loss_price: trade.sl,
+                    riskAmount: config.riskAmount
                 } as any);
                 
                 // Wait for exchange state to update
