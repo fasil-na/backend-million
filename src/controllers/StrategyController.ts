@@ -21,7 +21,6 @@ export class StrategyController {
         try {
             console.log('calling bactest route---')
             const pair = (req.body.pair as string) || "B-BTC_USDT";
-            const resolution = (req.body.resolution as string) || "5";
             const {
                 isLive, from, to, month, year, startYear, startMonth, endYear, endMonth
             } = req.body;
@@ -29,6 +28,7 @@ export class StrategyController {
             const settings = SettingsService.getSettings();
             const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: req.body.strategyId || 'fvg-imbalance', isEnabled: true });
             
+            const resolution = (req.body.resolution as string) || liveConfig?.timeInterval || "5";
             let riskAmount = req.body.riskAmount !== undefined ? req.body.riskAmount : settings.riskAmount;
             // If the requested risk matches the global setting, prioritize the live config's specific risk
             if (liveConfig && (riskAmount === settings.riskAmount || req.body.riskAmount === undefined)) {
@@ -86,7 +86,8 @@ export class StrategyController {
                                 atrMultiplierSL: 1.0, 
                                 riskAmount: riskAmount, 
                                 simulationStartUnix: simStart, 
-                                type: 'backtest'
+                                type: 'backtest',
+                                resolution: resolution
                             }, subCandles);
                             
                             if ('trades' in result) {

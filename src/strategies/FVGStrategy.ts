@@ -32,7 +32,7 @@ export class FVGStrategy implements Strategy {
 
         const trades: Trade[] = [];
         let balance = 10000; // Default starting balance for backtest tracking
-        const rr = params.riskRewardRatio || 3.9;
+        const rr = params.riskRewardRatio || 3.2;
         const riskAmount = params.riskAmount; // Derived strictly from configuration
         const fvgExpiryCandles = 100; // Max candles to wait for return (Reduced for Freshness)
         const rangeLookback = 100; // Lookback for Premium/Discount zone
@@ -209,12 +209,7 @@ export class FVGStrategy implements Strategy {
                         const buffer = 0;
                         const riskPerUnit = Math.abs(midpoint - (fvg.bottom - buffer));
 
-                        //        if (riskPerUnit < 20 ||riskPerUnit > 50) {
-                        //     // Skip this trade if the SL is too tight (less than 50 points)
-                        //     continue;
-                        // }
-
-                        if (riskPerUnit < (midpoint * 0.00001)) {
+                        if (riskPerUnit < 60) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
                             activeFVGs.splice(j, 1);
@@ -309,12 +304,7 @@ export class FVGStrategy implements Strategy {
                         const buffer = gapSize * 0.05;
                         const riskPerUnit = Math.abs((fvg.top + buffer) - midpoint);
 
-                        // if (riskPerUnit < 20 ||riskPerUnit > 50) {
-                        //     // Skip this trade if the SL is too tight (less than 50 points)
-                        //     continue;
-                        // }
-
-                        if (riskPerUnit < (midpoint * 0.00001)) {
+                        if (riskPerUnit < 60) {
                             fvg.filled = true;
                             fvg.filledAt = curr.time;
                             activeFVGs.splice(j, 1);
@@ -443,7 +433,7 @@ export class FVGStrategy implements Strategy {
         const entryFee = trade.entryPrice * units * feeRate;
         const exitFee = exitPrice * units * feeRate;
         const totalFee = entryFee + exitFee;
-        
+
         return { profit: grossProfit - totalFee, fee: totalFee };
     }
 
