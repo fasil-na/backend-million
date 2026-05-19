@@ -125,6 +125,7 @@ export class StrategyController {
                     successCount: allTrades.filter(t => t.profit > 0).length,
                     failedCount: allTrades.filter(t => t.profit <= 0).length,
                     winRate: allTrades.length > 0 ? (allTrades.filter(t => t.profit > 0).length / allTrades.length) * 100 : 0,
+                    averagePoints: allTrades.length > 0 ? allTrades.reduce((a, t) => a + (t.sl ? Math.abs(t.entryPrice - t.sl) : 0), 0) / allTrades.filter(t => t.sl).length || 0 : 0,
                     riskAmount,
                     finalBalance: currentBalance
                 }

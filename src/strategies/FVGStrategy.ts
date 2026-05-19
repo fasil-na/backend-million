@@ -21,8 +21,8 @@ export const FVG_EXPIRY_CANDLES = 50;
 const RANGE_LOOKBACK = 10;
 const MIN_GAP_SIZE_RATIO = 0.00005;
 const MIN_C2_BODY_RATIO = 0.001;
-const EMA_SHORT_PERIOD = 10;
-const EMA_LONG_PERIOD = 24;
+const EMA_SHORT_PERIOD = 30;
+const EMA_LONG_PERIOD = 70; // Represents the Macro-Trend
 const RSI_PERIOD = 14;
 const RSI_BULLISH_MIN = 15;
 const RSI_BULLISH_MAX = 75;
@@ -30,7 +30,7 @@ const MIN_RISK_PER_UNIT =30;
 const BEARISH_SL_BUFFER_RATIO = 0.001;
 const RSI_BEARISH_MIN = 15;
 const RSI_BEARISH_MAX = 75;
-const LIVE_SIGNAL_LOOKBACK = 50;
+const LIVE_SIGNAL_LOOKBACK = 100; // Must be larger than EMA_LONG_PERIOD for live mode to calculate it!
 
 
 const INITIAL_BALANCE = 10000;
