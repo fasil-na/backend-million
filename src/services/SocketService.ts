@@ -11,11 +11,11 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 import type { Candle, Position, Trade } from '../types/index.js';
 
-import { SettingsService } from './SettingsService.js';
+
 import { TradeService } from './TradeService.js';
 import { CoinDCXApiService } from './CoinDCXApiService.js';
 import { TradeHistoryService } from './TradeHistoryService.js';
-import { OpeningBreakoutStrategy } from '../strategies/OpeningBreakoutStrategy.js';
+
 import { calculateTradeProfit } from '../strategies/StrategyUtils.js';
 import { PriceStore } from './PriceStore.js';
 import { LiveConfigService } from './LiveConfigService.js';
@@ -512,8 +512,8 @@ export class SocketService {
                 if (intervalStr === '60') intervalMinutes = 60;
                 if (intervalStr === '1D') intervalMinutes = 1440;
                 
-                // Expiry rule: 100 candles
-                const maxWaitMinutes = 20 * intervalMinutes;
+                // Expiry rule: 100 candles to match backtest FVG_EXPIRY_CANDLES
+                const maxWaitMinutes = 100 * intervalMinutes;
                 console.log(maxWaitMinutes,'maxWaitMinutes--')
                 const entryTime = dayjs(activeTrade.entryTime);
                 const now = dayjs();

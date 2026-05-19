@@ -16,88 +16,165 @@ dayjs.extend(utc);
 
 dayjs.extend(timezone);
 
-// ─── Strategy Constants ────────────────────────────────────────────────────────
+const DEFAULT_RISK_REWARD_RATIO = 2.0;
+const FVG_EXPIRY_CANDLES = 20;
+const RANGE_LOOKBACK = 10;
+const MIN_GAP_SIZE_RATIO = 0.00005;
+const MIN_C2_BODY_RATIO = 0.001;
+const EMA_SHORT_PERIOD = 10;
+const EMA_LONG_PERIOD = 24;
+const RSI_PERIOD = 14;
+const RSI_BULLISH_MIN = 43;
+const RSI_BULLISH_MAX = 78;
+const MIN_RISK_PER_UNIT = 35;
+const BEARISH_SL_BUFFER_RATIO = 0.001;
+const RSI_BEARISH_MIN = 43;
+const RSI_BEARISH_MAX = 72;
+const LIVE_SIGNAL_LOOKBACK = 50;
 
+// const DEFAULT_RISK_REWARD_RATIO = 1.8;
+// const FVG_EXPIRY_CANDLES = 3;
+// const RANGE_LOOKBACK = 60;
+// const MIN_GAP_SIZE_RATIO = 0.00015;
+// const MIN_C2_BODY_RATIO = 0.007;
+// const EMA_SHORT_PERIOD = 9;
+// const EMA_LONG_PERIOD = 21;
+// const RSI_PERIOD = 14;
+// const RSI_BULLISH_MIN = 42;
+// const RSI_BULLISH_MAX = 78;
+// const MIN_RISK_PER_UNIT = 30;
+// const BEARISH_SL_BUFFER_RATIO = 0.015;
+// const RSI_BEARISH_MIN = 42;
+// const RSI_BEARISH_MAX = 68;
+// const LIVE_SIGNAL_LOOKBACK = 30;
+
+// const DEFAULT_RISK_REWARD_RATIO = 2.5;
+// const FVG_EXPIRY_CANDLES = 3;
+// const RANGE_LOOKBACK = 80;
+// const MIN_GAP_SIZE_RATIO = 0.00020;
+// const MIN_C2_BODY_RATIO = 0.010;
+// const EMA_SHORT_PERIOD = 12;
+// const EMA_LONG_PERIOD = 26;
+// const RSI_PERIOD = 14;
+// const RSI_BULLISH_MIN = 45;
+// const RSI_BULLISH_MAX = 76;
+// const MIN_RISK_PER_UNIT = 35;
+// const BEARISH_SL_BUFFER_RATIO = 0.022;
+// const RSI_BEARISH_MIN = 45;
+// const RSI_BEARISH_MAX = 68;
+// const LIVE_SIGNAL_LOOKBACK = 30;
+
+// // ─── Strategy Constants ────────────────────────────────────────────────────────
+
+// /** Starting balance used for backtest PnL tracking */
+
+// const INITIAL_BALANCE = 10000;
+
+// /** Default risk-reward ratio if not provided in params */
+
+// const DEFAULT_RISK_REWARD_RATIO = 2.7;
+
+// /** Maximum candles to wait for price to return to an FVG before expiring it */
+
+// const FVG_EXPIRY_CANDLES = 100;
+
+// /** Lookback window (in candles) for Premium/Discount equilibrium calculation */
+
+// const RANGE_LOOKBACK = 100;
+
+// /** Minimum gap size as a fraction of close price (0.02%) */
+
+// const MIN_GAP_SIZE_RATIO = 0.00024;
+
+// /** Minimum body-to-range ratio for the middle candle (C2) to qualify */
+
+// const MIN_C2_BODY_RATIO = 0.012;
+
+// /** EMA period for short-term trend filter */
+
+// const EMA_SHORT_PERIOD = 20;
+
+// /** EMA period for long-term trend filter */
+
+// const EMA_LONG_PERIOD = 120;
+
+// /** RSI period */
+
+// const RSI_PERIOD = 14;
+
+// /** RSI lower bound for bullish momentum filter */
+
+// const RSI_BULLISH_MIN = 45;
+
+// /** RSI upper bound for bullish momentum filter */
+
+// const RSI_BULLISH_MAX = 75;
+
+// /** Minimum risk-per-unit (in price terms) required to enter a trade */
+
+// const MIN_RISK_PER_UNIT = 60;
+
+// /** Maker Fee rate (0.02%) */
+// const MAKER_FEE_RATE = 0.0003;
+
+// /** Taker Fee rate (0.05%) */
+// const TAKER_FEE_RATE = 0.0006;
+
+// /** Buffer fraction of gap size added to SL for bearish entries */
+
+// const BEARISH_SL_BUFFER_RATIO = 0.05;
+
+// /** Fallback default minimum notional value when not found in static instrument data */
+
+// const DEFAULT_MIN_NOTIONAL = 6;
+
+// /** Default candle resolution (in minutes) when not specified in params */
+
+// const DEFAULT_RESOLUTION = "1";
+
+// /** Timezone used for all trade timestamps */
+
+// const TRADE_TIMEZONE = 'Asia/Kolkata';
+
+// /** Default fallback pair key when instrument is not found */
+
+// const DEFAULT_PAIR_KEY = 'B-BTC_USDT';
+
+// /** Number of recent candles to scan for live signal detection */
+
+// const LIVE_SIGNAL_LOOKBACK = 100;
+
+// ─── Strategy Constants ────────────────────────────────────────────────────────
+ 
 /** Starting balance used for backtest PnL tracking */
 
+// const DEFAULT_RISK_REWARD_RATIO = 2.7;
+// const FVG_EXPIRY_CANDLES = 5;
+// const RANGE_LOOKBACK = 100;
+// const MIN_GAP_SIZE_RATIO = 0.00024;
+// const MIN_C2_BODY_RATIO = 0.012;
+// const EMA_SHORT_PERIOD = 20;
+// const EMA_LONG_PERIOD = 80;
+// const RSI_PERIOD = 14;
+// const RSI_BULLISH_MIN = 45;
+// const RSI_BULLISH_MAX = 75;
+// const MIN_RISK_PER_UNIT = 50;
+// const BEARISH_SL_BUFFER_RATIO = 0.03;
+//  const RSI_BEARISH_MIN= 45
+//   const RSI_BEARISH_MAX= 65
+// const LIVE_SIGNAL_LOOKBACK = 50;
+ 
+
+
+
+
 const INITIAL_BALANCE = 10000;
-
-/** Default risk-reward ratio if not provided in params */
-
-const DEFAULT_RISK_REWARD_RATIO = 2.7;
-
-/** Maximum candles to wait for price to return to an FVG before expiring it */
-
-const FVG_EXPIRY_CANDLES = 100;
-
-/** Lookback window (in candles) for Premium/Discount equilibrium calculation */
-
-const RANGE_LOOKBACK = 100;
-
-/** Minimum gap size as a fraction of close price (0.02%) */
-
-const MIN_GAP_SIZE_RATIO = 0.00024;
-
-/** Minimum body-to-range ratio for the middle candle (C2) to qualify */
-
-const MIN_C2_BODY_RATIO = 0.012;
-
-/** EMA period for short-term trend filter */
-
-const EMA_SHORT_PERIOD = 20;
-
-/** EMA period for long-term trend filter */
-
-const EMA_LONG_PERIOD = 120;
-
-/** RSI period */
-
-const RSI_PERIOD = 14;
-
-/** RSI lower bound for bullish momentum filter */
-
-const RSI_BULLISH_MIN = 45;
-
-/** RSI upper bound for bullish momentum filter */
-
-const RSI_BULLISH_MAX = 75;
-
-/** Minimum risk-per-unit (in price terms) required to enter a trade */
-
-const MIN_RISK_PER_UNIT = 10;
-
-/** Maker Fee rate (0.02%) */
-const MAKER_FEE_RATE = 0.0003;
-
-/** Taker Fee rate (0.05%) */
-const TAKER_FEE_RATE = 0.0006;
-
-/** Buffer fraction of gap size added to SL for bearish entries */
-
-const BEARISH_SL_BUFFER_RATIO = 0.05;
-
-/** Fallback default minimum notional value when not found in static instrument data */
-
 const DEFAULT_MIN_NOTIONAL = 6;
-
-/** Default candle resolution (in minutes) when not specified in params */
-
-const DEFAULT_RESOLUTION = "1";
-
-/** Timezone used for all trade timestamps */
-
-const TRADE_TIMEZONE = 'Asia/Kolkata';
-
-/** Default fallback pair key when instrument is not found */
-
 const DEFAULT_PAIR_KEY = 'B-BTC_USDT';
-
-/** Number of recent candles to scan for live signal detection */
-
-const LIVE_SIGNAL_LOOKBACK = 100;
-
-// ──────────────────────────────────────────────────────────────────────────────
-
+const TRADE_TIMEZONE = 'Asia/Kolkata';
+ const DEFAULT_RESOLUTION = "15";
+const MAKER_FEE_RATE = 0.0003;
+const TAKER_FEE_RATE = 0.0006;
 export interface FVG {
 
     top: number;
@@ -363,7 +440,11 @@ console.log(activeTrade,'activeTrade----')
 
                 if (!fvg) continue;
 
-                if (i !== fvg.formedAt) continue;
+                if (params.type === 'live_signal') {
+                    if (i !== fvg.formedAt) continue;
+                } else {
+                    if (i <= fvg.formedAt) continue;
+                }
 
                 if (i - fvg.formedAt > fvgExpiryCandles) {
 
@@ -383,19 +464,22 @@ console.log(activeTrade,'activeTrade----')
 
                 if (fvg.direction === "bullish") {
 
-                    // --- INSTITUTIONAL FILTERS (DISABLED FOR TESTING) ---
+                    // --- INSTITUTIONAL FILTERS ---
+                    
+                    // Re-calculate the equilibrium EXACTLY as it was when the FVG formed
+                    const fvgStartRange = Math.max(0, fvg.formedAt - rangeLookback);
+                    const fvgWindow = candles.slice(fvgStartRange, fvg.formedAt + 1);
+                    const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
-                    // 1. Trend: Above EMA50
+                    // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed (when Limit Order is placed)
+                    if (candles[fvg.formedAt]!.close <= ema50[fvg.formedAt]!) continue;
 
-                    if (curr.close <= e50) continue;
+                    // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
+                    const formedRSI = rsiValues[fvg.formedAt] || 50;
+                    if (formedRSI <= RSI_BULLISH_MIN || formedRSI >= RSI_BULLISH_MAX) continue;
 
-                    // 2. Momentum: RSI between 45 and 75
-
-                    if (currentRSI <= RSI_BULLISH_MIN || currentRSI >= RSI_BULLISH_MAX) continue;
-
-                    // 3. PD Zone: Only buy in DISCOUNT (< 50% of recent range)
-
-                    if (curr.close >= equilibrium) continue;
+                    // 3. PD Zone: The entry price (midpoint) MUST be in the DISCOUNT zone relative to the range at formation
+                    if (midpoint >= fvgEquilibrium) continue;
 
                     // -----------------------------
 
@@ -413,7 +497,8 @@ console.log(activeTrade,'activeTrade----')
 
                     }
 
-                    if (true) {
+                    const entryCondition = params.type === 'live_signal' ? true : (curr.low <= midpoint && curr.high >= midpoint);
+                    if (entryCondition) {
 
                         // 🕒 Only enter trades AFTER simulationStart
 
@@ -551,19 +636,22 @@ console.log(activeTrade,'activeTrade----')
 
                 } else {
 
-                    // --- INSTITUTIONAL FILTERS (DISABLED FOR TESTING) ---
+                    // --- INSTITUTIONAL FILTERS ---
+                    
+                    // Re-calculate the equilibrium EXACTLY as it was when the FVG formed
+                    const fvgStartRange = Math.max(0, fvg.formedAt - rangeLookback);
+                    const fvgWindow = candles.slice(fvgStartRange, fvg.formedAt + 1);
+                    const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
-                    // 1. Trend: Below EMA50
+                    // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed
+                    if (candles[fvg.formedAt]!.close >= ema50[fvg.formedAt]!) continue;
 
-                    // if (curr.close >= e50) continue;
+                    // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
+                    const formedRSI = rsiValues[fvg.formedAt] || 50;
+                    if (formedRSI >= RSI_BEARISH_MAX || formedRSI <= RSI_BEARISH_MIN) continue;
 
-                    // 2. Momentum: RSI between 25 and 55
-
-                    // if (currentRSI >= 55 || currentRSI <= 25) continue;
-
-                    // 3. PD Zone: Only sell in PREMIUM (> 50% of recent range)
-
-                    // if (curr.close <= equilibrium) continue;
+                    // 3. PD Zone: The entry price (midpoint) MUST be in the PREMIUM zone relative to the range at formation
+                    if (midpoint <= fvgEquilibrium) continue;
 
                     // -----------------------------
 
@@ -581,7 +669,8 @@ console.log(activeTrade,'activeTrade----')
 
                     }
 
-                    if (true) {
+                    const entryCondition = params.type === 'live_signal' ? true : (curr.high >= midpoint && curr.low <= midpoint);
+                    if (entryCondition) {
 
                         // 🕒 Only enter trades AFTER simulationStart
 
@@ -847,7 +936,7 @@ console.log(activeTrade,'activeTrade----')
 
         // Re-run the FVG detection on the subset
 
-        const result = this.run(relevantCandles, { ...params, type: 'backtest' });
+        const result = this.run(relevantCandles, { ...params, type: 'live_signal' });
 
         return {
 

@@ -40,7 +40,14 @@ export class StrategyController {
             let allTrades: Trade[] = [];
             let periods: { year: number, month: number }[] = [];
 
-            if (isLive) {
+            if (req.body.startDate && req.body.endDate) {
+                let current = dayjs.utc(req.body.startDate).startOf('month');
+                const end = dayjs.utc(req.body.endDate).endOf('month');
+                while (current.isBefore(end) || current.isSame(end, 'month')) {
+                    periods.push({ year: current.year(), month: current.month() });
+                    current = current.add(1, 'month');
+                }
+            } else if (isLive) {
                 const todayStart = dayjs().tz('Asia/Kolkata').startOf('day');
                 periods.push({ year: todayStart.year(), month: todayStart.month() });
             } else if (startYear !== undefined && startMonth !== undefined && endYear !== undefined && endMonth !== undefined) {
@@ -130,8 +137,10 @@ export class StrategyController {
         try {
             const date = req.query.date as string;
             const pair = (req.query.pair as string) || "B-BTC_USDT";
-            const resolution = (req.query.resolution as string) || "1";
             if (!date) return res.status(400).json({ error: 'Date is required' });
+
+            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: 'fvg-imbalance', isEnabled: true });
+            const resolution = (req.query.resolution as string) || liveConfig?.timeInterval || "1";
 
             const targetDate = dayjs(date as string).tz('Asia/Kolkata');
             const start = Math.floor(targetDate.startOf('day').valueOf() / 1000);
@@ -158,7 +167,6 @@ export class StrategyController {
             if (!strategy) return res.status(404).json({ error: 'FVG strategy not found' });
 
             const settings = SettingsService.getSettings();
-            const liveConfig = await LiveConfigModel.findOne({ pair, strategyId: 'fvg-imbalance', isEnabled: true });
             const riskAmount = liveConfig?.riskAmount ?? settings.riskAmount;
 
             // 1. Run strategy simulation ONLY for indicators (FVG boxes)
@@ -167,7 +175,8 @@ export class StrategyController {
                 leverage: liveConfig?.leverage || 1,
                 riskAmount: riskAmount,
                 simulationStartUnix: start,
-                type: 'backtest'
+                type: 'backtest',
+                resolution: resolution
             }, subCandles);
 
             // 2. Fetch REAL executed trades from Database for this pair/day
@@ -177,8 +186,8 @@ export class StrategyController {
             const realTrades = await TradeModel.find({
                 pair: pair as string,
                 entryTime: { $gte: startStr, $lte: endStr },
-                // Optionally filter for FVG strategy only if you want strict parity
-                // strategyId: 'fvg-imbalance' 
+                strategyId: 'fvg-imbalance',
+                resolution: resolution
             }).lean();
 
             // Return real and simulated data for the UI
