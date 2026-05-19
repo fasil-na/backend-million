@@ -3,6 +3,7 @@ import { Server as HTTPServer } from 'http';
 import { coinDCXSocket } from './CoinDCXSocketService.js';
 import { DEFAULT_RESOLUTION } from '../config/constants.js';
 import { strategies } from '../strategies/index.js';
+import { FVG_EXPIRY_CANDLES } from '../strategies/FVGStrategy.js';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -512,15 +513,15 @@ export class SocketService {
                 if (intervalStr === '60') intervalMinutes = 60;
                 if (intervalStr === '1D') intervalMinutes = 1440;
                 
-                // Expiry rule: 100 candles to match backtest FVG_EXPIRY_CANDLES
-                const maxWaitMinutes = 100 * intervalMinutes;
+                // Expiry rule: sync perfectly with FVG_EXPIRY_CANDLES
+                const maxWaitMinutes = FVG_EXPIRY_CANDLES * intervalMinutes;
                 console.log(maxWaitMinutes,'maxWaitMinutes--')
                 const entryTime = dayjs(activeTrade.entryTime);
                 const now = dayjs();
                 const minutesElapsed = now.diff(entryTime, 'minute');
                 console.log(minutesElapsed,'minutesElapsed--')
                 if (minutesElapsed >= maxWaitMinutes) {
-                    await LoggerService.log('warning', `⏳ Limit order expired after 100 candles (${maxWaitMinutes}m) for ${activeTrade.pair}. Cancelling on exchange...`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
+                    await LoggerService.log('warning', `⏳ Limit order expired after ${FVG_EXPIRY_CANDLES} candles (${maxWaitMinutes}m) for ${activeTrade.pair}. Cancelling on exchange...`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
                     
                     if (activeTrade.pair) {
                         await TradeService.cancelAllOrders(activeTrade.pair);

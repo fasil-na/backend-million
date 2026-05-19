@@ -16,156 +16,21 @@ dayjs.extend(utc);
 
 dayjs.extend(timezone);
 
-const DEFAULT_RISK_REWARD_RATIO = 2.0;
-const FVG_EXPIRY_CANDLES = 20;
+const DEFAULT_RISK_REWARD_RATIO = 3.5;
+export const FVG_EXPIRY_CANDLES = 50;
 const RANGE_LOOKBACK = 10;
 const MIN_GAP_SIZE_RATIO = 0.00005;
 const MIN_C2_BODY_RATIO = 0.001;
 const EMA_SHORT_PERIOD = 10;
 const EMA_LONG_PERIOD = 24;
 const RSI_PERIOD = 14;
-const RSI_BULLISH_MIN = 43;
-const RSI_BULLISH_MAX = 78;
-const MIN_RISK_PER_UNIT = 35;
+const RSI_BULLISH_MIN = 15;
+const RSI_BULLISH_MAX = 75;
+const MIN_RISK_PER_UNIT =30;
 const BEARISH_SL_BUFFER_RATIO = 0.001;
-const RSI_BEARISH_MIN = 43;
-const RSI_BEARISH_MAX = 72;
+const RSI_BEARISH_MIN = 15;
+const RSI_BEARISH_MAX = 75;
 const LIVE_SIGNAL_LOOKBACK = 50;
-
-// const DEFAULT_RISK_REWARD_RATIO = 1.8;
-// const FVG_EXPIRY_CANDLES = 3;
-// const RANGE_LOOKBACK = 60;
-// const MIN_GAP_SIZE_RATIO = 0.00015;
-// const MIN_C2_BODY_RATIO = 0.007;
-// const EMA_SHORT_PERIOD = 9;
-// const EMA_LONG_PERIOD = 21;
-// const RSI_PERIOD = 14;
-// const RSI_BULLISH_MIN = 42;
-// const RSI_BULLISH_MAX = 78;
-// const MIN_RISK_PER_UNIT = 30;
-// const BEARISH_SL_BUFFER_RATIO = 0.015;
-// const RSI_BEARISH_MIN = 42;
-// const RSI_BEARISH_MAX = 68;
-// const LIVE_SIGNAL_LOOKBACK = 30;
-
-// const DEFAULT_RISK_REWARD_RATIO = 2.5;
-// const FVG_EXPIRY_CANDLES = 3;
-// const RANGE_LOOKBACK = 80;
-// const MIN_GAP_SIZE_RATIO = 0.00020;
-// const MIN_C2_BODY_RATIO = 0.010;
-// const EMA_SHORT_PERIOD = 12;
-// const EMA_LONG_PERIOD = 26;
-// const RSI_PERIOD = 14;
-// const RSI_BULLISH_MIN = 45;
-// const RSI_BULLISH_MAX = 76;
-// const MIN_RISK_PER_UNIT = 35;
-// const BEARISH_SL_BUFFER_RATIO = 0.022;
-// const RSI_BEARISH_MIN = 45;
-// const RSI_BEARISH_MAX = 68;
-// const LIVE_SIGNAL_LOOKBACK = 30;
-
-// // ─── Strategy Constants ────────────────────────────────────────────────────────
-
-// /** Starting balance used for backtest PnL tracking */
-
-// const INITIAL_BALANCE = 10000;
-
-// /** Default risk-reward ratio if not provided in params */
-
-// const DEFAULT_RISK_REWARD_RATIO = 2.7;
-
-// /** Maximum candles to wait for price to return to an FVG before expiring it */
-
-// const FVG_EXPIRY_CANDLES = 100;
-
-// /** Lookback window (in candles) for Premium/Discount equilibrium calculation */
-
-// const RANGE_LOOKBACK = 100;
-
-// /** Minimum gap size as a fraction of close price (0.02%) */
-
-// const MIN_GAP_SIZE_RATIO = 0.00024;
-
-// /** Minimum body-to-range ratio for the middle candle (C2) to qualify */
-
-// const MIN_C2_BODY_RATIO = 0.012;
-
-// /** EMA period for short-term trend filter */
-
-// const EMA_SHORT_PERIOD = 20;
-
-// /** EMA period for long-term trend filter */
-
-// const EMA_LONG_PERIOD = 120;
-
-// /** RSI period */
-
-// const RSI_PERIOD = 14;
-
-// /** RSI lower bound for bullish momentum filter */
-
-// const RSI_BULLISH_MIN = 45;
-
-// /** RSI upper bound for bullish momentum filter */
-
-// const RSI_BULLISH_MAX = 75;
-
-// /** Minimum risk-per-unit (in price terms) required to enter a trade */
-
-// const MIN_RISK_PER_UNIT = 60;
-
-// /** Maker Fee rate (0.02%) */
-// const MAKER_FEE_RATE = 0.0003;
-
-// /** Taker Fee rate (0.05%) */
-// const TAKER_FEE_RATE = 0.0006;
-
-// /** Buffer fraction of gap size added to SL for bearish entries */
-
-// const BEARISH_SL_BUFFER_RATIO = 0.05;
-
-// /** Fallback default minimum notional value when not found in static instrument data */
-
-// const DEFAULT_MIN_NOTIONAL = 6;
-
-// /** Default candle resolution (in minutes) when not specified in params */
-
-// const DEFAULT_RESOLUTION = "1";
-
-// /** Timezone used for all trade timestamps */
-
-// const TRADE_TIMEZONE = 'Asia/Kolkata';
-
-// /** Default fallback pair key when instrument is not found */
-
-// const DEFAULT_PAIR_KEY = 'B-BTC_USDT';
-
-// /** Number of recent candles to scan for live signal detection */
-
-// const LIVE_SIGNAL_LOOKBACK = 100;
-
-// ─── Strategy Constants ────────────────────────────────────────────────────────
- 
-/** Starting balance used for backtest PnL tracking */
-
-// const DEFAULT_RISK_REWARD_RATIO = 2.7;
-// const FVG_EXPIRY_CANDLES = 5;
-// const RANGE_LOOKBACK = 100;
-// const MIN_GAP_SIZE_RATIO = 0.00024;
-// const MIN_C2_BODY_RATIO = 0.012;
-// const EMA_SHORT_PERIOD = 20;
-// const EMA_LONG_PERIOD = 80;
-// const RSI_PERIOD = 14;
-// const RSI_BULLISH_MIN = 45;
-// const RSI_BULLISH_MAX = 75;
-// const MIN_RISK_PER_UNIT = 50;
-// const BEARISH_SL_BUFFER_RATIO = 0.03;
-//  const RSI_BEARISH_MIN= 45
-//   const RSI_BEARISH_MAX= 65
-// const LIVE_SIGNAL_LOOKBACK = 50;
- 
-
-
 
 
 const INITIAL_BALANCE = 10000;
@@ -178,11 +43,9 @@ const TAKER_FEE_RATE = 0.0006;
 export interface FVG {
 
     top: number;
-
     bottom: number;
 
     direction: "bullish" | "bearish";
-
     formedAt: number; // candle index
 
     filled: boolean;
