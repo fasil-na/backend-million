@@ -472,14 +472,14 @@ console.log(activeTrade,'activeTrade----')
                     const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
                     // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed (when Limit Order is placed)
-                    if (candles[fvg.formedAt]!.close <= ema50[fvg.formedAt]!) continue;
+                    // if (candles[fvg.formedAt]!.close <= ema50[fvg.formedAt]!) continue;
 
                     // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
                     const formedRSI = rsiValues[fvg.formedAt] || 50;
                     if (formedRSI <= RSI_BULLISH_MIN || formedRSI >= RSI_BULLISH_MAX) continue;
 
                     // 3. PD Zone: The entry price (midpoint) MUST be in the DISCOUNT zone relative to the range at formation
-                    if (midpoint >= fvgEquilibrium) continue;
+                    // if (midpoint >= fvgEquilibrium) continue;
 
                     // -----------------------------
 
@@ -644,14 +644,14 @@ console.log(activeTrade,'activeTrade----')
                     const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
                     // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed
-                    if (candles[fvg.formedAt]!.close >= ema50[fvg.formedAt]!) continue;
+                    // if (candles[fvg.formedAt]!.close >= ema50[fvg.formedAt]!) continue;
 
                     // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
                     const formedRSI = rsiValues[fvg.formedAt] || 50;
                     if (formedRSI >= RSI_BEARISH_MAX || formedRSI <= RSI_BEARISH_MIN) continue;
 
                     // 3. PD Zone: The entry price (midpoint) MUST be in the PREMIUM zone relative to the range at formation
-                    if (midpoint <= fvgEquilibrium) continue;
+                    // if (midpoint <= fvgEquilibrium) continue;
 
                     // -----------------------------
 
