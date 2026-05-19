@@ -319,34 +319,75 @@ export class SocketService {
             });
 
             const isActive = !!pos && pos.active_pos !== 0;
-            if (isActive) state.currentPosition = pos;
+            if (isActive) {
+                state.currentPosition = pos;
+                console.log(pos,'pos-----------')
+                // Sync actual execution data from CoinDCX directly into our activeTrade!
+                if (state.activeTrade && state.activeTrade.status === 'open' && state.activeTrade.type === 'real') {
+                    const exchangeSL = pos.stop_loss_trigger || 0;
+                    const exchangeTP = pos.take_profit_trigger || 0;
+                    
+                    const changed = state.activeTrade.entryPrice !== pos.avg_price || 
+                                    (exchangeSL > 0 && state.activeTrade.sl !== exchangeSL) || 
+                                    (exchangeTP > 0 && state.activeTrade.tp !== exchangeTP);
+                                    
+                    if (changed && pos.avg_price > 0) {
+                        state.activeTrade.entryPrice = pos.avg_price;
+                        if (exchangeSL > 0) state.activeTrade.sl = exchangeSL;
+                        if (exchangeTP > 0) state.activeTrade.tp = exchangeTP;
+                        TradeHistoryService.saveTrade(state.activeTrade);
+                        this.io.emit('trade-history-update', state.activeTrade);
+                        console.log(`[SocketService] 🔄 Synced Slippage from CoinDCX for ${pair}: Entry=${pos.avg_price}, SL=${pos.stop_loss_trigger}, TP=${pos.take_profit_trigger}`);
+                    }
+                }
+            }
 
             if (wasActive && !isActive) {
                 // Position closed on exchange
                 console.log(`[Position] Trade CLOSED on exchange for ${pair}`);
-                if (state.activeTrade) {
-                    state.activeTrade.status = 'closed';
-                    state.activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
-                    state.activeTrade.exitReason = 'Exchange Position Closed';
+                
+                // PREVENT RACE CONDITIONS: Extract trade and clear state immediately!
+                const tradeToClose = state.activeTrade;
+                state.activeTrade = null;
+                state.currentPosition = null;
+
+                if (tradeToClose) {
+                    tradeToClose.status = 'closed';
+                    tradeToClose.exitTime = dayjs().tz('Asia/Kolkata').format();
+                    tradeToClose.exitReason = 'Exchange Position Closed';
                     
-                    // Try to get last known price for profit calculation
-                    const registry = this.marketRegistry.get(this.formatChannel(pair, '1'));
-                    const lastCandle = registry?.candles && registry.candles.length > 0 ? registry.candles[registry.candles.length - 1] : null;
-                    const lastPrice = lastCandle ? lastCandle.close : state.activeTrade.sl;
-                    
-                    if (lastPrice) {
-                        const { profit, fee, pnlPercent } = calculateTradeProfit(state.activeTrade, lastPrice, 0.0005);
-                        state.activeTrade.profit = profit;
-                        state.activeTrade.fee = fee;
-                        state.activeTrade.pnlPercent = pnlPercent;
-                        state.activeTrade.exitPrice = lastPrice;
+                    try {
+                        // Wait a moment for CoinDCX to log the exit order
+                        await new Promise(r => setTimeout(r, 500));
+                        const orders = await TradeService.getOrders();
+                        const exitOrder = Array.isArray(orders) ? orders.find((o: any) => o.pair === pair && o.status === 'filled' && (o.stage === 'exit' || o.order_category === 'complete_tpsl' || o.order_type === 'stop_market' || o.order_type === 'take_profit_market')) : null;
+                        
+                        let exitPrice = exitOrder && exitOrder.avg_price > 0 ? exitOrder.avg_price : null;
+                        
+                        if (!exitPrice) {
+                            const registry = this.marketRegistry.get(this.formatChannel(pair, '1'));
+                            const lastCandle = registry?.candles && registry.candles.length > 0 ? registry.candles[registry.candles.length - 1] : null;
+                            exitPrice = lastCandle ? lastCandle.close : tradeToClose.sl;
+                        }
+                        
+                        if (exitPrice) {
+                            const { profit, fee, pnlPercent } = calculateTradeProfit(tradeToClose, exitPrice, 0.0005);
+                            tradeToClose.profit = profit;
+                            tradeToClose.fee = fee;
+                            tradeToClose.pnlPercent = pnlPercent;
+                            tradeToClose.exitPrice = exitPrice;
+                            
+                            if (exitOrder) {
+                                tradeToClose.exitReason = `Exchange Auto-Closed (${exitOrder.order_type === 'stop_market' ? 'SL Hit' : 'TP Hit'})`;
+                            }
+                        }
+                    } catch (err) {
+                        console.error(`[Position] Error fetching exact exit price for ${pair}:`, err);
                     }
 
-                    await TradeHistoryService.saveTrade(state.activeTrade);
-                    this.io.emit('trade-history-update', state.activeTrade);
-                    state.activeTrade = null;
+                    await TradeHistoryService.saveTrade(tradeToClose);
+                    this.io.emit('trade-history-update', tradeToClose);
                 }
-                state.currentPosition = null;
             }
         }
     });
@@ -461,6 +502,55 @@ export class SocketService {
             const activeTrade = state.activeTrade;
             if (!activeTrade || activeTrade.status !== 'open') return;
 
+            // NEW LOGIC: Ignore SL/TP for pending Real Trades! Wait for expiry instead.
+            if (activeTrade.type === 'real' && !state.currentPosition) {
+                const intervalStr = state.config.interval || '1';
+                let intervalMinutes = 1;
+                if (intervalStr === '5') intervalMinutes = 5;
+                if (intervalStr === '15') intervalMinutes = 15;
+                if (intervalStr === '30') intervalMinutes = 30;
+                if (intervalStr === '60') intervalMinutes = 60;
+                if (intervalStr === '1D') intervalMinutes = 1440;
+                
+                // Expiry rule: 100 candles
+                const maxWaitMinutes = 20 * intervalMinutes;
+                console.log(maxWaitMinutes,'maxWaitMinutes--')
+                const entryTime = dayjs(activeTrade.entryTime);
+                const now = dayjs();
+                const minutesElapsed = now.diff(entryTime, 'minute');
+                console.log(minutesElapsed,'minutesElapsed--')
+                if (minutesElapsed >= maxWaitMinutes) {
+                    await LoggerService.log('warning', `⏳ Limit order expired after 100 candles (${maxWaitMinutes}m) for ${activeTrade.pair}. Cancelling on exchange...`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
+                    
+                    if (activeTrade.pair) {
+                        await TradeService.cancelAllOrders(activeTrade.pair);
+                    }
+                    
+                    activeTrade.status = 'closed';
+                    activeTrade.exitPrice = tick.close;
+                    activeTrade.exitTime = now.tz('Asia/Kolkata').format();
+                    activeTrade.exitReason = `Expired/Missed (100 Candles)`;
+                    activeTrade.profit = 0;
+                    activeTrade.fee = 0;
+                    
+                    await TradeHistoryService.saveTrade(activeTrade);
+                    state.activeTrade = null;
+                    this.io.emit('trade-history-update', activeTrade);
+                }
+                
+                // Early return! DO NOT check SL/TP because the order hasn't filled yet!
+                return;
+            }
+
+            // If it's a real trade and it IS active (state.currentPosition exists), 
+            // CoinDCX is managing the SL and TP automatically! 
+            // We should NOT manually close it here. Let the exchange do it.
+            if (activeTrade.type === 'real') {
+                return;
+            }
+
+            // --- PAPER TRADE LOGIC ONLY BEYOND THIS POINT ---
+
             const currentPrice = tick.close;
             const high = tick.high || currentPrice;
             const low = tick.low || currentPrice;
@@ -483,58 +573,21 @@ export class SocketService {
             }
 
             if (exitHit) {
-                if (activeTrade.type === 'real' && !state.isClosingPosition) {
-                    await LoggerService.log('warning', `🎯 REAL ${reason} Triggered for ${activeTrade.pair} at ${currentPrice}. Closing position...`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
-                    state.isClosingPosition = true;
-                    try {
-                        const pos = state.currentPosition;
-                        if (pos) {
-                            await TradeService.closePosition({ positionId: pos.id });
-                            
-                            // Update trade record with exit data
-                            activeTrade.status = 'closed';
-                            activeTrade.exitPrice = currentPrice;
-                            activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
-                            activeTrade.exitReason = `REAL ${reason}`;
-                            
-                            // Use position quantity from exchange if units are missing in trade record
-                            if (!activeTrade.units && pos.active_pos) {
-                                activeTrade.units = Math.abs(pos.active_pos);
-                            }
-
-                            const { profit, fee, pnlPercent } = calculateTradeProfit(activeTrade, currentPrice, 0.0005);
-                            activeTrade.profit = profit;
-                            activeTrade.fee = fee;
-                            activeTrade.pnlPercent = pnlPercent;
-                            
-                            console.log(`[SL-Monitor] Profit Calc: Entry=${activeTrade.entryPrice}, Exit=${currentPrice}, Units=${activeTrade.units}, Direction=${activeTrade.direction}, Profit=${profit}, PnL%=${pnlPercent}`);
-                            
-                            await TradeHistoryService.saveTrade(activeTrade);
-                            state.activeTrade = null;
-                            state.currentPosition = null;
-                            this.io.emit('trade-history-update', activeTrade);
-
-                            await LoggerService.log('success', `✅ REAL Position Closed (${reason}) for ${activeTrade.pair} | PnL: ${profit.toFixed(4)}`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
-                        }
-                    } catch (err: any) {
-                        await LoggerService.log('error', `❌ Real Exit Failed for ${activeTrade.pair}: ${err.message}`, 'SocketService', { configId: activeTrade.configId || '', pair: activeTrade.pair || '' });
-                    }
-                } else if (activeTrade.type !== 'real') {
-                    activeTrade.status = 'closed';
-                    const targetPrice = reason === 'SL Hit' ? sl : tp;
-                    activeTrade.exitPrice = targetPrice;
-                    activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
-                    activeTrade.exitReason = `Ticket ${reason}`;
-                    
-                    const { profit, fee } = calculateTradeProfit(activeTrade, targetPrice, 0.0005);
-                    activeTrade.profit = profit;
-                    activeTrade.fee = fee;
-                    
-                    await TradeHistoryService.saveTrade(activeTrade);
-                    state.activeTrade = null;
-                    this.io.emit('trade-history-update', activeTrade);
-                    console.log(`[Monitor] 🎯 ${activeTrade.type?.toUpperCase() || 'REAL'} ${reason} for ${activeTrade.pair}.`);
-                }
+                activeTrade.status = 'closed';
+                const targetPrice = reason === 'SL Hit' ? sl : tp;
+                activeTrade.exitPrice = targetPrice;
+                activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
+                activeTrade.exitReason = `PAPER ${reason}`;
+                
+                const { profit, fee, pnlPercent } = calculateTradeProfit(activeTrade, targetPrice, 0.0005);
+                activeTrade.profit = profit;
+                activeTrade.fee = fee;
+                activeTrade.pnlPercent = pnlPercent;
+                
+                await TradeHistoryService.saveTrade(activeTrade);
+                state.activeTrade = null;
+                this.io.emit('trade-history-update', activeTrade);
+                console.log(`[Monitor] 🎯 PAPER ${reason} for ${activeTrade.pair}. PnL: ${profit}`);
             }
         } catch (err: any) {
             console.error("Monitor status failed:", err.message);

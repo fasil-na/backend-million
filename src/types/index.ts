@@ -23,6 +23,7 @@ export interface Trade {
     pair?: string | undefined;
     configId?: string | undefined;
     strategyId?: string | undefined;
+    orderType?: 'limit_order' | 'market_order' | undefined;
     executionError?: string | undefined;
     pnlPercent?: number | undefined;
     indicators?: any | undefined;

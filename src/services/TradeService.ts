@@ -87,11 +87,13 @@ export class TradeService {
 
         const marginName = pair.includes('USDT') ? 'USDT' : 'INR';
 
-        return { pair, qty: Number(qty.toFixed(qtyPrecision)), maxLeverage, tpPrice, slPrice, marginName };
+        const formattedEntryPrice = entryPrice > 0 ? Number(Number(entryPrice).toFixed(pricePrecision)) : 0;
+
+        return { pair, qty: Number(qty.toFixed(qtyPrecision)), maxLeverage, tpPrice, slPrice, marginName, formattedEntryPrice };
     }
 
     // final excecution of trade
-    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined, riskAmount?: number }) {
+    static async executeFutureOrder(trade: Partial<Trade> & { pair?: string | undefined, leverage?: number | undefined, stop_loss_price?: number | undefined, take_profit_price?: number | undefined, riskAmount?: number, orderType?: string }) {
         const { apiKey, apiSecret } = this.credentials;
         if (!apiKey || !apiSecret) {
             console.error("❌ CoinDCX API Key or Secret missing in .env. Skipping trade execution.");
@@ -102,7 +104,7 @@ export class TradeService {
         const timeStamp = Math.floor(Date.now()); // API strictly requires milliseconds, NOT seconds.
 
         try {
-            const { pair, qty, maxLeverage, tpPrice, slPrice, marginName } = this.formatTradeParams(
+            const { pair, qty, maxLeverage, tpPrice, slPrice, marginName, formattedEntryPrice } = this.formatTradeParams(
                 trade.pair || settings.pair,
                 Number(trade.units),
                 Number(trade.leverage) || 10, // Use leverage from trade config (LiveConfig), default to 10 if missing
@@ -117,12 +119,12 @@ export class TradeService {
             const baseOrder: any = {
                 side: trade.direction?.toLowerCase() || 'buy',
                 pair: pair,
-                order_type: "market_order",
-                price: null,
+                order_type: trade.orderType || "market_order",
+                price: trade.orderType === 'limit_order' ? formattedEntryPrice : null,
                 total_quantity: qty,
                 leverage: maxLeverage,
                 notification: "no_notification",
-                time_in_force: null,
+                time_in_force: trade.orderType === 'limit_order' ? "good_till_cancel" : null,
                 margin_currency_short_name: marginName
             };
 
@@ -231,6 +233,74 @@ export class TradeService {
         } catch (error: any) {
             console.error("❌ Failed to fetch positions:", error.response?.data || error.message);
             return null
+        }
+    }
+
+    static async getOrders() {
+        const { apiKey, apiSecret } = this.credentials;
+        if (!apiKey || !apiSecret) return [];
+
+        const timeStamp = Math.floor(Date.now());
+        const body = { timestamp: timeStamp };
+        const bodyString = JSON.stringify(body);
+        const signature = crypto.createHmac('sha256', apiSecret).update(bodyString).digest('hex');
+
+        try {
+            const response = await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders`, bodyString, {
+                headers: {
+                    'X-AUTH-APIKEY': apiKey,
+                    'X-AUTH-SIGNATURE': signature,
+                    'Content-Type': 'application/json'
+                }
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error("❌ Failed to fetch orders:", error.response?.data || error.message);
+            return null;
+        }
+    }
+
+    static async cancelAllOrders(pair: string) {
+        const { apiKey, apiSecret } = this.credentials;
+        if (!apiKey || !apiSecret) return;
+
+        try {
+            // First get all orders
+            const orders = await this.getOrders();
+            if (!Array.isArray(orders)) return;
+
+            // Find open orders for this pair
+            const openOrders = orders.filter(o => o.pair === pair && o.status === 'open');
+            if (openOrders.length === 0) {
+                console.log(`ℹ️ No active limit orders to cancel for ${pair}`);
+                return;
+            }
+
+            console.log(`[TradeService] Found ${openOrders.length} open orders for ${pair}. Cancelling...`);
+
+            // Cancel each one
+            for (const order of openOrders) {
+                const timeStamp = Math.floor(Date.now());
+                const cancelBody = { timestamp: timeStamp, id: order.id };
+                const cancelBodyString = JSON.stringify(cancelBody);
+                const cancelSignature = crypto.createHmac('sha256', apiSecret).update(cancelBodyString).digest('hex');
+
+                await axios.post(`${this.baseUrl}/exchange/v1/derivatives/futures/orders/cancel`, cancelBodyString, {
+                    headers: {
+                        'X-AUTH-APIKEY': apiKey,
+                        'X-AUTH-SIGNATURE': cancelSignature,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                console.log(`✅ Cancelled order ${order.id} for ${pair}`);
+                
+                // Slight delay to prevent rate limiting
+                await new Promise(r => setTimeout(r, 200));
+            }
+            return { message: 'success' };
+        } catch (error: any) {
+            console.error(`❌ Failed to cancel orders for ${pair}:`, error.response?.data || error.message);
+            return null;
         }
     }
 

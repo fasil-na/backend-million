@@ -64,11 +64,13 @@ const RSI_BULLISH_MAX = 75;
 
 /** Minimum risk-per-unit (in price terms) required to enter a trade */
 
-const MIN_RISK_PER_UNIT = 60;
+const MIN_RISK_PER_UNIT = 10;
 
-/** Fee rate per side (0.06%) */
+/** Maker Fee rate (0.02%) */
+const MAKER_FEE_RATE = 0.0003;
 
-const FEE_RATE = 0.0006;
+/** Taker Fee rate (0.05%) */
+const TAKER_FEE_RATE = 0.0006;
 
 /** Buffer fraction of gap size added to SL for bearish entries */
 
@@ -257,7 +259,7 @@ export class FVGStrategy implements Strategy {
             }
 
             // 2. Manage Active Trade
-
+console.log(activeTrade,'activeTrade----')
             if (activeTrade) {
 
                 const curr = candles[i]!;
@@ -307,11 +309,14 @@ export class FVGStrategy implements Strategy {
                     }
 
                     // Net PnL = Gross Profit - Entry Fee - Exit Fee
+                    const isTakeProfit = activeTrade.exitReason === "Take Profit" || activeTrade.exitReason === "Take Profit (Sub)";
+                    const exitFeeRate = isTakeProfit ? MAKER_FEE_RATE : TAKER_FEE_RATE;
 
-                    const entryFee = activeTrade.entryPrice * units * FEE_RATE;
-
-                    const exitFee = activeTrade.exitPrice! * units * FEE_RATE;
-
+                    const entryFee = activeTrade.entryPrice * units * MAKER_FEE_RATE;
+                    const exitFee = activeTrade.exitPrice! * units * exitFeeRate;
+                    console.log(grossProfit, 'grossProfit------')
+                    console.log(entryFee, 'entryFee------')
+                    console.log(exitFee, 'exitFee------')
                     activeTrade.profit = grossProfit - entryFee - exitFee;
 
                     activeTrade.pnlPercent = (activeTrade.profit / balance) * 100;
@@ -358,7 +363,7 @@ export class FVGStrategy implements Strategy {
 
                 if (!fvg) continue;
 
-                if (i <= fvg.formedAt) continue;
+                if (i !== fvg.formedAt) continue;
 
                 if (i - fvg.formedAt > fvgExpiryCandles) {
 
@@ -408,7 +413,7 @@ export class FVGStrategy implements Strategy {
 
                     }
 
-                    if (curr.low <= midpoint && curr.high >= midpoint) {
+                    if (true) {
 
                         // 🕒 Only enter trades AFTER simulationStart
 
@@ -494,6 +499,8 @@ export class FVGStrategy implements Strategy {
 
                             status: "open",
 
+                            orderType: "limit_order",
+
                             profit: 0,
 
                             indicators: { fvgTop: fvg.top, fvgBottom: fvg.bottom }
@@ -574,7 +581,7 @@ export class FVGStrategy implements Strategy {
 
                     }
 
-                    if (curr.high >= midpoint && curr.low <= midpoint) {
+                    if (true) {
 
                         // 🕒 Only enter trades AFTER simulationStart
 
@@ -659,6 +666,8 @@ export class FVGStrategy implements Strategy {
                             resolution: params.resolution || DEFAULT_RESOLUTION,
 
                             status: "open",
+
+                            orderType: "limit_order",
 
                             profit: 0,
 
@@ -814,12 +823,12 @@ export class FVGStrategy implements Strategy {
 
             : (trade.entryPrice - exitPrice) * units;
 
-        // Calculate fee dynamically: 0.06% per side
+        // Calculate fee dynamically based on exit reason
+        const isTakeProfit = trade.exitReason === "Take Profit" || trade.exitReason === "Take Profit (Sub)";
+        const exitFeeRate = isTakeProfit ? MAKER_FEE_RATE : TAKER_FEE_RATE;
 
-        const entryFee = trade.entryPrice * units * FEE_RATE;
-
-        const exitFee = exitPrice * units * FEE_RATE;
-
+        const entryFee = trade.entryPrice * units * MAKER_FEE_RATE;
+        const exitFee = exitPrice * units * exitFeeRate;
         const totalFee = entryFee + exitFee;
 
         return { profit: grossProfit - totalFee, fee: totalFee };
