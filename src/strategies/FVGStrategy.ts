@@ -249,11 +249,10 @@ console.log(activeTrade,'activeTrade----')
                     }
 
                     // Net PnL = Gross Profit - Entry Fee - Exit Fee
-                    const isTakeProfit = activeTrade.exitReason === "Take Profit" || activeTrade.exitReason === "Take Profit (Sub)";
-                    const exitFeeRate = isTakeProfit ? MAKER_FEE_RATE : TAKER_FEE_RATE;
+                    // All exits (TP and SL) execute as Market Orders on CoinDCX, so they pay Taker Fee
 
                     const entryFee = activeTrade.entryPrice * units * MAKER_FEE_RATE;
-                    const exitFee = activeTrade.exitPrice! * units * exitFeeRate;
+                    const exitFee = activeTrade.exitPrice! * units * TAKER_FEE_RATE;
                     console.log(grossProfit, 'grossProfit------')
                     console.log(entryFee, 'entryFee------')
                     console.log(exitFee, 'exitFee------')
@@ -777,10 +776,9 @@ console.log(activeTrade,'activeTrade----')
 
         // Calculate fee dynamically based on exit reason
         const isTakeProfit = trade.exitReason === "Take Profit" || trade.exitReason === "Take Profit (Sub)";
-        const exitFeeRate = isTakeProfit ? MAKER_FEE_RATE : TAKER_FEE_RATE;
 
         const entryFee = trade.entryPrice * units * MAKER_FEE_RATE;
-        const exitFee = exitPrice * units * exitFeeRate;
+        const exitFee = exitPrice * units * TAKER_FEE_RATE;
         const totalFee = entryFee + exitFee;
 
         return { profit: grossProfit - totalFee, fee: totalFee };
