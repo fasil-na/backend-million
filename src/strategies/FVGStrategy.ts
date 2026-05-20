@@ -16,27 +16,22 @@ dayjs.extend(utc);
 
 dayjs.extend(timezone);
 
-const DEFAULT_RISK_REWARD_RATIO = 2.0; // slightly lower = more hits
 
-export const FVG_EXPIRY_CANDLES = 14; // 🔥 5 → 20
-
-const RANGE_LOOKBACK = 0; // 🔥 remove structure restriction
-
-const MIN_GAP_SIZE_RATIO = 0.00002; // 🔥 smaller gaps allowed
-
-const MIN_C2_BODY_RATIO = 0.0005; // 🔥 weaker candles allowed
-
+const DEFAULT_RISK_REWARD_RATIO = 3.5;
+export const FVG_EXPIRY_CANDLES = 50;
+const RANGE_LOOKBACK = 10;
+const MIN_GAP_SIZE_RATIO = 0.00005;
+const MIN_C2_BODY_RATIO = 0.001;
 const RSI_PERIOD = 14;
+const RSI_BULLISH_MIN = 15;
+const RSI_BULLISH_MAX = 75;
+const MIN_RISK_PER_UNIT =30;
+const BEARISH_SL_BUFFER_RATIO = 0.001;
+const RSI_BEARISH_MIN = 15;
+const RSI_BEARISH_MAX = 75;
 
-const MIN_RISK_PER_UNIT = 5; // 🔥 allow smaller trades
 
-const BEARISH_SL_BUFFER_RATIO = 0.0005; // tighter SL
 
-// Optional: remove RSI filter effect
-const RSI_BEARISH_MIN = 0;
-const RSI_BEARISH_MAX = 100;
-const RSI_BULLISH_MIN = 0;
-const RSI_BULLISH_MAX = 100;
 
 const INITIAL_BALANCE = 10000;
 const DEFAULT_MIN_NOTIONAL = 6;
