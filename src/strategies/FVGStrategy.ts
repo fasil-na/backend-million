@@ -16,22 +16,27 @@ dayjs.extend(utc);
 
 dayjs.extend(timezone);
 
-const DEFAULT_RISK_REWARD_RATIO = 3.5;
-export const FVG_EXPIRY_CANDLES = 50;
-const RANGE_LOOKBACK = 10;
-const MIN_GAP_SIZE_RATIO = 0.00005;
-const MIN_C2_BODY_RATIO = 0.001;
-const EMA_SHORT_PERIOD = 30;
-const EMA_LONG_PERIOD = 70; // Represents the Macro-Trend
-const RSI_PERIOD = 14;
-const RSI_BULLISH_MIN = 15;
-const RSI_BULLISH_MAX = 75;
-const MIN_RISK_PER_UNIT =30;
-const BEARISH_SL_BUFFER_RATIO = 0.001;
-const RSI_BEARISH_MIN = 15;
-const RSI_BEARISH_MAX = 75;
-const LIVE_SIGNAL_LOOKBACK = 100; // Must be larger than EMA_LONG_PERIOD for live mode to calculate it!
+const DEFAULT_RISK_REWARD_RATIO = 2.0; // slightly lower = more hits
 
+export const FVG_EXPIRY_CANDLES = 14; // 🔥 5 → 20
+
+const RANGE_LOOKBACK = 0; // 🔥 remove structure restriction
+
+const MIN_GAP_SIZE_RATIO = 0.00002; // 🔥 smaller gaps allowed
+
+const MIN_C2_BODY_RATIO = 0.0005; // 🔥 weaker candles allowed
+
+const RSI_PERIOD = 14;
+
+const MIN_RISK_PER_UNIT = 5; // 🔥 allow smaller trades
+
+const BEARISH_SL_BUFFER_RATIO = 0.0005; // tighter SL
+
+// Optional: remove RSI filter effect
+const RSI_BEARISH_MIN = 0;
+const RSI_BEARISH_MAX = 100;
+const RSI_BULLISH_MIN = 0;
+const RSI_BULLISH_MAX = 100;
 
 const INITIAL_BALANCE = 10000;
 const DEFAULT_MIN_NOTIONAL = 6;
@@ -97,10 +102,6 @@ export class FVGStrategy implements Strategy {
         // --- MOMENTUM & TREND PRE-CALCULATION ---
 
         const closes = candles.map(c => c.close);
-
-        const ema50 = calculateEMA(closes, EMA_SHORT_PERIOD);
-
-        const ema200 = calculateEMA(closes, EMA_LONG_PERIOD);
 
         const rsiValues = calculateRSI(closes, RSI_PERIOD);
 
@@ -199,7 +200,7 @@ export class FVGStrategy implements Strategy {
             }
 
             // 2. Manage Active Trade
-console.log(activeTrade,'activeTrade----')
+// console.log(activeTrade,'activeTrade----')
             if (activeTrade) {
 
                 const curr = candles[i]!;
@@ -251,11 +252,15 @@ console.log(activeTrade,'activeTrade----')
                     // Net PnL = Gross Profit - Entry Fee - Exit Fee
                     // All exits (TP and SL) execute as Market Orders on CoinDCX, so they pay Taker Fee
 
-                    const entryFee = activeTrade.entryPrice * units * MAKER_FEE_RATE;
-                    const exitFee = activeTrade.exitPrice! * units * TAKER_FEE_RATE;
+                    const entryFee = Math.ceil(activeTrade.entryPrice * units * MAKER_FEE_RATE * 1000) / 1000;
+                    const exitFee = Math.ceil(activeTrade.exitPrice! * units * TAKER_FEE_RATE * 1000) / 1000;
                     console.log(grossProfit, 'grossProfit------')
                     console.log(entryFee, 'entryFee------')
                     console.log(exitFee, 'exitFee------')
+                    activeTrade.grossProfit = Number(grossProfit.toFixed(3));
+                    activeTrade.entryFee = entryFee;
+                    activeTrade.exitFee = exitFee;
+                    activeTrade.fee = entryFee + exitFee;
                     activeTrade.profit = grossProfit - entryFee - exitFee;
 
                     activeTrade.pnlPercent = (activeTrade.profit / balance) * 100;
@@ -277,8 +282,6 @@ console.log(activeTrade,'activeTrade----')
             if (activeTrade || i === lastExitIndex) continue;
 
             const curr = candles[i]!;
-
-            const e50 = ema50[i] || 0;
 
             const currentRSI = rsiValues[i] || 50;
 
@@ -303,7 +306,7 @@ console.log(activeTrade,'activeTrade----')
                 if (!fvg) continue;
 
                 if (params.type === 'live_signal') {
-                    if (i !== fvg.formedAt) continue;
+                    if (i !== candles.length - 1 || i !== fvg.formedAt) continue;
                 } else {
                     if (i <= fvg.formedAt) continue;
                 }
@@ -333,10 +336,7 @@ console.log(activeTrade,'activeTrade----')
                     const fvgWindow = candles.slice(fvgStartRange, fvg.formedAt + 1);
                     const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
-                    // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed (when Limit Order is placed)
-                    // if (candles[fvg.formedAt]!.close <= ema50[fvg.formedAt]!) continue;
-
-                    // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
+                    // 1. Momentum: Evaluate RSI exactly at the time the FVG formed
                     const formedRSI = rsiValues[fvg.formedAt] || 50;
                     if (formedRSI <= RSI_BULLISH_MIN || formedRSI >= RSI_BULLISH_MAX) continue;
 
@@ -398,10 +398,12 @@ console.log(activeTrade,'activeTrade----')
 
                         }
 
-                        const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
+                        const step = staticData.qtyStep;
+                        const unitsPrecision = step.toString().split('.')[1]?.length || 0;
 
                         let units = riskAmount / riskPerUnit;
 
+                        units = Math.floor(units / step) * step;
                         units = Number(units.toFixed(unitsPrecision));
 
                         // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
@@ -469,14 +471,17 @@ console.log(activeTrade,'activeTrade----')
                             activeTrade.exitTime = exitInfo.time;
 
                             activeTrade.exitReason = exitInfo.reason;
+                            const pnlResult = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
+                            
+                            activeTrade.grossProfit = Number(pnlResult.grossProfit.toFixed(4));
+                            activeTrade.entryFee = pnlResult.entryFee;
+                            activeTrade.exitFee = pnlResult.exitFee;
+                            activeTrade.fee = pnlResult.fee;
+                            activeTrade.profit = pnlResult.profit;
 
-                            const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
+                            activeTrade.pnlPercent = (pnlResult.profit / balance) * 100;
 
-                            activeTrade.profit = profit;
-
-                            activeTrade.pnlPercent = (profit / balance) * 100;
-
-                            balance += profit;
+                            balance += pnlResult.profit;
 
                             trades.push({ ...activeTrade });
 
@@ -505,10 +510,7 @@ console.log(activeTrade,'activeTrade----')
                     const fvgWindow = candles.slice(fvgStartRange, fvg.formedAt + 1);
                     const fvgEquilibrium = (Math.max(...fvgWindow.map(c => c.high)) + Math.min(...fvgWindow.map(c => c.low))) / 2;
 
-                    // 1. Trend: Evaluate EMA50 exactly at the time the FVG formed
-                    // if (candles[fvg.formedAt]!.close >= ema50[fvg.formedAt]!) continue;
-
-                    // 2. Momentum: Evaluate RSI exactly at the time the FVG formed
+                    // 1. Momentum: Evaluate RSI exactly at the time the FVG formed
                     const formedRSI = rsiValues[fvg.formedAt] || 50;
                     if (formedRSI >= RSI_BEARISH_MAX || formedRSI <= RSI_BEARISH_MIN) continue;
 
@@ -570,10 +572,12 @@ console.log(activeTrade,'activeTrade----')
 
                         }
 
-                        const unitsPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
+                        const step = staticData.qtyStep;
+                        const unitsPrecision = step.toString().split('.')[1]?.length || 0;
 
                         let units = riskAmount / riskPerUnit;
 
+                        units = Math.floor(units / step) * step;
                         units = Number(units.toFixed(unitsPrecision));
 
                         // Enforce minimum quantity based on STATIC_INSTRUMENTS (minNotional & qtyStep)
@@ -639,14 +643,17 @@ console.log(activeTrade,'activeTrade----')
                             activeTrade.exitTime = exitInfo.time;
 
                             activeTrade.exitReason = exitInfo.reason;
+                            const pnlResult = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
 
-                            const { profit, fee } = this.calculatePnL(activeTrade, activeTrade.exitPrice, balance);
+                            activeTrade.grossProfit = Number(pnlResult.grossProfit.toFixed(4));
+                            activeTrade.entryFee = pnlResult.entryFee;
+                            activeTrade.exitFee = pnlResult.exitFee;
+                            activeTrade.fee = pnlResult.fee;
+                            activeTrade.profit = pnlResult.profit;
 
-                            activeTrade.profit = profit;
+                            activeTrade.pnlPercent = (pnlResult.profit / balance) * 100;
 
-                            activeTrade.pnlPercent = (profit / balance) * 100;
-
-                            balance += profit;
+                            balance += pnlResult.profit;
 
                             trades.push({ ...activeTrade });
 
@@ -777,11 +784,16 @@ console.log(activeTrade,'activeTrade----')
         // Calculate fee dynamically based on exit reason
         const isTakeProfit = trade.exitReason === "Take Profit" || trade.exitReason === "Take Profit (Sub)";
 
-        const entryFee = trade.entryPrice * units * MAKER_FEE_RATE;
-        const exitFee = exitPrice * units * TAKER_FEE_RATE;
+        const entryFee = Math.ceil(trade.entryPrice * units * MAKER_FEE_RATE * 1000) / 1000;
+        const exitFee = Math.ceil(exitPrice * units * TAKER_FEE_RATE * 1000) / 1000;
         const totalFee = entryFee + exitFee;
-
-        return { profit: grossProfit - totalFee, fee: totalFee };
+        console.log("trade.direction", trade.direction)
+        console.log("trade.entryFee", trade.entryFee)
+        console.log("exitFee", exitFee)
+        console.log("units", units)
+        console.log("totalFee", totalFee)
+        console.log("grossProfit", grossProfit)
+        return { profit: grossProfit - totalFee, fee: totalFee, grossProfit, entryFee, exitFee };
 
     }
 
@@ -789,15 +801,8 @@ console.log(activeTrade,'activeTrade----')
 
         if (candles.length < 5) return { matched: false };
 
-        // We only care about the last N candles to detect relevant FVGs
-
-        const lookback = Math.min(candles.length, LIVE_SIGNAL_LOOKBACK);
-
-        const relevantCandles = candles.slice(-lookback);
-
-        // Re-run the FVG detection on the subset
-
-        const result = this.run(relevantCandles, { ...params, type: 'live_signal' });
+        // We use the ENTIRE candle history (up to 3000 candles) to calculate indicators so they perfectly match the backtest.
+        const result = this.run(candles, { ...params, type: 'live_signal' });
 
         return {
 

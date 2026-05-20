@@ -118,10 +118,8 @@ export class TradeHistoryService {
     static async clearAll() {
         try {
             await TradeModel.deleteMany({
-                $or: [
-                    { status: { $ne: 'open' } },
-                    { type: { $nin: ['real', 'paper'] } }
-                ]
+                type: { $ne: 'real' },
+                status: { $ne: 'open' }
             });
         } catch (e) {
             console.error("Error clearing trades from MongoDB:", e);

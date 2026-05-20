@@ -176,7 +176,7 @@ export class SocketService {
     private static async primeHistory(pair: string, interval: string) {
         try {
             const channel = this.formatChannel(pair, interval);
-            const from = Math.floor(Date.now() / 1000) - 86400; // 24 hours
+            const from = Math.floor(Date.now() / 1000) - 172800; // 2 days
             const response = await CoinDCXApiService.getCandlesticks({
                 pair, from, to: Math.floor(Date.now() / 1000), resolution: interval
             });
@@ -210,6 +210,7 @@ export class SocketService {
 
             const channel = this.formatChannel(incomingPair, (data as any).resolution || '1');
             const registry = this.marketRegistry.get(channel);
+          
             if (!registry) return;
 
             // 1. Update Candle Buffer (O(1) logic)
@@ -220,7 +221,6 @@ export class SocketService {
                 const isNewCandleTrigger = registry.candles.length > 0;
                 registry.candleIndexMap.set(data.time, registry.candles.length);
                 registry.candles.push(data);
-
                 if (registry.candles.length > 3000) {
                     const removed = registry.candles.shift();
                     if (removed) {
@@ -372,9 +372,12 @@ export class SocketService {
                         }
                         
                         if (exitPrice) {
-                            const { profit, fee, pnlPercent } = calculateTradeProfit(tradeToClose, exitPrice, 0.0005);
+                            const { profit, fee, pnlPercent, grossProfit, entryFee, exitFee } = calculateTradeProfit(tradeToClose, exitPrice, 0.0005);
                             tradeToClose.profit = profit;
                             tradeToClose.fee = fee;
+                            tradeToClose.grossProfit = grossProfit;
+                            tradeToClose.entryFee = entryFee;
+                            tradeToClose.exitFee = exitFee;
                             tradeToClose.pnlPercent = pnlPercent;
                             tradeToClose.exitPrice = exitPrice;
                             
@@ -515,7 +518,7 @@ export class SocketService {
                 
                 // Expiry rule: sync perfectly with FVG_EXPIRY_CANDLES
                 const maxWaitMinutes = FVG_EXPIRY_CANDLES * intervalMinutes;
-                console.log(maxWaitMinutes,'maxWaitMinutes--')
+                console.log(maxWaitMinutes,'maxWaitMinutes--+++++')
                 const entryTime = dayjs(activeTrade.entryTime);
                 const now = dayjs();
                 const minutesElapsed = now.diff(entryTime, 'minute');
@@ -580,9 +583,12 @@ export class SocketService {
                 activeTrade.exitTime = dayjs().tz('Asia/Kolkata').format();
                 activeTrade.exitReason = `PAPER ${reason}`;
                 
-                const { profit, fee, pnlPercent } = calculateTradeProfit(activeTrade, targetPrice, 0.0005);
+                const { profit, fee, pnlPercent, grossProfit, entryFee, exitFee } = calculateTradeProfit(activeTrade, targetPrice, 0.0005);
                 activeTrade.profit = profit;
                 activeTrade.fee = fee;
+                activeTrade.grossProfit = grossProfit;
+                activeTrade.entryFee = entryFee;
+                activeTrade.exitFee = exitFee;
                 activeTrade.pnlPercent = pnlPercent;
                 
                 await TradeHistoryService.saveTrade(activeTrade);
@@ -709,8 +715,69 @@ export class SocketService {
                 }
             }
             console.log(`[Recovery] ✅ Multi-pair history reconstruction complete.`);
+            await this.syncExchangeOrphanOrders();
         } catch (err: any) {
             console.error('[Recovery] ❌ Recovery failed:', err.message);
+        }
+    }
+
+    /**
+     * 🔄 ORPHAN SYNC: Fetches Open Orders from CoinDCX and ensures they are tracked in our app database.
+     * Fixes the issue where an order was placed, but backend restart orphaned it.
+     */
+    private static async syncExchangeOrphanOrders() {
+        try {
+            console.log(`[Sync] 🔄 Checking for orphaned exchange limit orders...`);
+            const orders = await TradeService.getOrders();
+            if (!Array.isArray(orders)) return;
+
+            const openOrders = orders.filter(o => o.status === 'open' && o.order_type === 'limit_order');
+            
+            for (const order of openOrders) {
+                // Find configId for this pair
+                let configId = '';
+                for (const [id, state] of this.configStates.entries()) {
+                    if (state.config.pair === order.pair) {
+                        configId = id;
+                        break;
+                    }
+                }
+
+                // Does our DB know about this order?
+                // Match by pair, side, entryPrice, and recent time buffer
+                const entryTimeIso = dayjs(order.created_at).tz('Asia/Kolkata').format();
+                const existing = await TradeHistoryService.findTradeByTime(entryTimeIso);
+                
+                if (!existing) {
+                    console.log(`[Sync] ⚠️ Found Orphaned Order on CoinDCX! ${order.side} ${order.pair} at ${order.price}. Re-registering...`);
+                    
+                    const recoveredTrade: Partial<Trade> = {
+                        pair: order.pair,
+                        configId: configId || 'orphaned',
+                        direction: order.side as 'buy' | 'sell',
+                        entryPrice: order.price,
+                        units: order.total_quantity,
+                        sl: order.stop_loss_price,
+                        tp: order.take_profit_price,
+                        status: 'open',
+                        type: 'real',
+                        entryTime: entryTimeIso,
+                    };
+                    
+                    const saved = await TradeHistoryService.saveTrade(recoveredTrade as any);
+                    
+                    // Assign to live state so it can be managed/cancelled
+                    if (configId) {
+                        const state = this.configStates.get(configId);
+                        if (state && !state.activeTrade) {
+                            state.activeTrade = saved as any;
+                        }
+                    }
+                }
+            }
+            console.log(`[Sync] ✅ Orphaned order check complete.`);
+        } catch (err: any) {
+            console.error(`[Sync] ❌ Failed to sync orphan orders:`, err.message);
         }
     }
 }

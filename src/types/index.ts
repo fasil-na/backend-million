@@ -17,6 +17,9 @@ export interface Trade {
     lastHigh?: number | undefined;
     lastLow?: number | undefined;
     units?: number | undefined; 
+    grossProfit?: number | undefined;
+    entryFee?: number | undefined;
+    exitFee?: number | undefined;
     fee?: number | undefined;
     trailingCount?: number | undefined;
     type?: 'manual' | 'auto' | 'paper' | 'real' | 'recovery' | undefined;

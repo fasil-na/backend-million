@@ -66,12 +66,12 @@ export class StrategyController {
                 const monthEnd = dayjs().year(period.year).month(period.month).endOf('month');
 
                 let simStart = Math.floor(monthStart.valueOf() / 1000);
-                let fetchStart = simStart - (24 * 60 * 60);
+                let fetchStart = simStart - 172800; // 2 days warmup
                 let end = Math.floor(monthEnd.valueOf() / 1000);
 
                 if (isLive) {
                     simStart = Math.floor(dayjs().tz('Asia/Kolkata').startOf('day').valueOf() / 1000);
-                    fetchStart = simStart - (24 * 60 * 60);
+                    fetchStart = simStart - 172800; // 2 days warmup
                     end = Math.floor(Date.now() / 1000);
                 }
 
@@ -147,8 +147,8 @@ export class StrategyController {
             const start = Math.floor(targetDate.startOf('day').valueOf() / 1000);
             const end = Math.floor(targetDate.endOf('day').valueOf() / 1000);
             
-            // To detect FVG correctly, we need some candles before the start of the day
-            const fetchStart = start - (24 * 60 * 60); // 1 day before for indicators
+            // To detect FVG correctly and warm up indicators (RSI), we fetch 2 days before the start of the day
+            const fetchStart = start - 172800; // 2 days before for indicators
 
             console.log(`[FVGAnalysis] 🔍 Fetching data for ${pair} (${resolution}m) on ${date}...`);
 

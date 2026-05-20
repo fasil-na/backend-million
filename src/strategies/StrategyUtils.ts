@@ -26,7 +26,7 @@ export function calculateUnits(
 export function calculateTradeProfit(
     trade: Trade,
     exitPrice: number,
-    feeRate: number
+    feeRate: number = 0.0006 // fallback if we don't have distinct maker/taker
 ) {
     const units = trade.units || 0;
  
@@ -35,13 +35,21 @@ export function calculateTradeProfit(
         : (trade.entryPrice - exitPrice) * units;
  
     const pnlPercent = trade.entryPrice > 0 ? (grossProfit / (trade.entryPrice * units / (trade.leverage || 1))) * 100 : 0;
-    const fee = 0.10; // Enforced flat $0.10 fee for system parity
+    
+    const MAKER_FEE_RATE = 0.0003;
+    const TAKER_FEE_RATE = 0.0006;
+
+    const entryFee = Math.ceil(trade.entryPrice * units * MAKER_FEE_RATE * 1000) / 1000;
+    const exitFee = Math.ceil(exitPrice * units * TAKER_FEE_RATE * 1000) / 1000;
+    const totalFee = entryFee + exitFee;
 
     return {
-        profit: parseFloat((grossProfit - fee).toFixed(4)),
-        fee: parseFloat(fee.toFixed(4)),
-        grossProfit: parseFloat(grossProfit.toFixed(4)),
-        points: parseFloat((exitPrice - trade.entryPrice).toFixed(4)),
+        profit: parseFloat((grossProfit - totalFee).toFixed(3)),
+        fee: parseFloat(totalFee.toFixed(3)),
+        grossProfit: parseFloat(grossProfit.toFixed(3)),
+        entryFee: parseFloat(entryFee.toFixed(3)),
+        exitFee: parseFloat(exitFee.toFixed(3)),
+        points: parseFloat((exitPrice - trade.entryPrice).toFixed(3)),
         pnlPercent: parseFloat(pnlPercent.toFixed(2))
     };
 }

@@ -62,8 +62,10 @@ export class TradeService {
             }
         }
 
-        const qtyPrecision = staticData.qtyStep.toString().split('.')[1]?.length || 0;
-        qty = Number(Number(qty).toFixed(qtyPrecision));
+        const step = staticData.qtyStep;
+        const qtyPrecision = step.toString().split('.')[1]?.length || 0;
+        qty = Math.floor(qty / step) * step;
+        qty = Number(qty.toFixed(qtyPrecision));
 
         // // 1. Cap by maxNotional to prevent 'Insufficient funds'
         // if (entryPrice > 0) {
